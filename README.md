@@ -125,11 +125,7 @@ tools/check_ini.bat    离线参数校验
 | EC（Ares + Phobos，CnCNet 客户端） | 已实机验证 |
 | 原生 YR 1.001 + Ares | 未测试（cameo 走 SHP 路径） |
 | 原生 YR 1.001，无 Ares | 未测试（使用 `Cameo=`，`CameoPCX=` 不生效） |
-| 无 swside 素材的 mod | 未测试（格子不绘制底色，cameo 直接画在战场上） |
 | 修改或加壳过 `gamemd.exe` 的 mod | 不支持：钩子点是 YR 1.001 的绝对地址，启动时会比对 exe 时间戳并写 WARNING |
-
-`CameoPCX=` 由 Ares 定义，无 Ares 时 art 里不会有这个键，面板退回引擎的 `Cameo=`
-SHP 路径；该键存在时由面板自己加载 PCX，不调用 Ares。
 
 运行时不依赖 Ares 或 Phobos：该 DLL 只读取游戏自身的 `HouseClass` /
 `FactoryClass` / 单位数组，不使用 `ReadProcessMemory`，不需要管理员权限；素材也只从
