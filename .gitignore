@@ -1,0 +1,20 @@
+# build products
+obj/
+*.dll
+*.lib
+*.exp
+*.pdb
+
+# tool scratch
+tools/_ini_check/
+tools/_disasm/
+
+# local config / logs (the shipped reference is docs/uimd-sample.ini)
+*.log
+*.bak
+
+# editor
+.vs/
+.vscode/
+*.user
+*.suo

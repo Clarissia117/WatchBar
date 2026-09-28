@@ -1,0 +1,21 @@
+# Everything is stored as LF, except batch files: cmd.exe parses .bat line by
+# line and the `goto :label` loops in build/deploy/check_ini do not survive a
+# bare LF checkout.
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# binaries: never touch
+*.dll  -text
+*.lib  -text
+*.exp  -text
+*.pdb  -text
+*.exe  -text
+*.pcx  -text
+*.shp  -text
+*.mix  -text
+*.png  -text
+*.jpg  -text
+*.jpeg -text
+*.gif  -text
