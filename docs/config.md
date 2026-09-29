@@ -134,8 +134,10 @@ WatchBar.DownPCX=swside01down.pcx
 
 面板只读取这五个键，不读取也不跟随任何其他 mod 的侧边栏配置。`UpPCX` / `DownPCX` 不写
 时 ▲▼ 退回代码自绘的三角（`ScrollGlyph*Color` 三色）；`CenterPCX` 不写时**不绘制格子
-底色**，cameo 直接画在战场上（不填充任何替代色块）；开关条两个键都不写时退化为一条
-横线。面板在任何一种缺失下仍可使用。
+底色**，cameo 直接画在战场上（不填充任何替代色块）；开关条两个键都不写时退化为自绘的
+左/右箭头（◀ / ▶），箭头指向面板所在的一侧：面板展开时指左（开关条贴在面板右缘），
+收起时指右（面板将从开关条右侧展开），因此没有素材也能一眼看出当前状态。面板在任何
+一种缺失下仍可使用。
 
 翻页按钮的素材按 `WatchBar.ScrollButtonWidth` × `ScrollButtonHeight` 直接贴图，不做
 缩放：素材实际尺寸与这两个值不一致时改参数，不要让素材拉伸。素材只有「上」「下」各
@@ -166,7 +168,7 @@ File.Flag=C4_FLAG.PCX
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `WatchBar.ClockEnabled` | 1 | `1` = 绘制 gclock2 建造时钟（进度的唯一显示）；`0` = 在 cameo 中央显示百分比数字。素材缺失时自动退回数字显示，无需修改此项 |
+| `WatchBar.ClockEnabled` | 1 | `1` = 绘制 gclock2 建造时钟（在造进度的唯一显示）；`0` = 在 cameo 中央显示百分比数字。造好待放置的格子不画时钟，只显示 `WatchBar.DoneText`。素材缺失时自动退回数字显示，无需修改此项 |
 
 ## 颜色
 
@@ -183,8 +185,8 @@ File.Flag=C4_FLAG.PCX
 | `WatchBar.ScrollGlyphActiveColor` | 200,200,200 | ▲▼ 三角：可滚动 |
 | `WatchBar.ScrollGlyphIdleColor` | 110,110,110 | ▲▼ 三角：已到顶端或底端 |
 | `WatchBar.ScrollGlyphHeldColor` | 255,255,255 | ▲▼ 三角：按住中 |
-| `WatchBar.ToggleGlyphOnColor` | 210,210,210 | 开关条中间方块：展开 |
-| `WatchBar.ToggleGlyphOffColor` | 70,70,70 | 开关条中间方块：收起 |
+| `WatchBar.ToggleGlyphOnColor` | 210,210,210 | 开关条自绘箭头（◀/▶）的颜色，仅在没写 `OnPCX` / `OffPCX` 时使用 |
+| `WatchBar.ToggleGlyphOffColor` | 70,70,70 | 开关条自绘底板的颜色，仅在没写 `OnPCX` / `OffPCX` 时使用 |
 
 玩家名使用该玩家自己的阵营颜色，不可配置。
 
@@ -340,7 +342,7 @@ File.Flag=C4_FLAG.PCX
 | `WatchBar.LogPath` | 空 | 留空 = `<游戏根目录>\WatchBar.log` |
 
 无法识别的键名、越界的数字、格式错误的颜色都记录在日志中。日志第一行是版本横幅
-（`==== WatchBar 1.3.0 (编译日期 时间) ====`），随后一行记录读到的键数与来源；版本号固定
+（`==== WatchBar 1.3.3 (编译日期 时间) ====`），随后一行记录读到的键数与来源；版本号固定
 内置在程序里，不是参数。
 
 ## 兼容性自检

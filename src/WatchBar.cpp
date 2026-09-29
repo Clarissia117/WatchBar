@@ -2515,13 +2515,21 @@ static bool ClockReady()
 // the spectator's own sidebar uses. EC ships no sidec mixes and the global
 // gclock2.shp (expandmd) is used; a mod that later ships per-faction
 // SIDEC0NMD.MIX files is followed automatically.
-static void DrawClock(DSurface* pSurface, int cx, int cy, int step)
+static void DrawClock(DSurface* pSurface, int cx, int cy, const RowIcon& icon)
 {
+    // A finished item draws the DoneText instead of a clock. The last gclock2
+    // frame is a near-complete sweep, not an empty one: left on screen it sits
+    // right under the centred label and reads as "still building" - the exact
+    // ambiguity the DoneText exists to remove - so the sweep is for work still
+    // in progress only.
+    if (icon.Done)
+        return;
+
     const SHPStruct* pClock = FileSystem::GCLOCK2_SHP;
     if (!ClockReady())
         return;
 
-    int frame = step + 1;
+    int frame = icon.Step + 1;
     if (frame > pClock->Frames - 1)
         frame = pClock->Frames - 1;   // defensive: never index past the table
 
@@ -2537,8 +2545,9 @@ static void DrawClock(DSurface* pSurface, int cx, int cy, int step)
 // The gclock2 sweep is the progress display, so no percentage is drawn on top of
 // it (the two would report the same number). What remains as text:
 //
-//   done -> the WatchBar.DoneText string in green, centred: a full clock still
-//           reads as "building" to anyone who did not watch the sweep complete
+//   done -> the WatchBar.DoneText string in green, centred. No clock is drawn
+//           underneath it (see DrawClock): a full clock still reads as
+//           "building" to anyone who did not watch the sweep complete
 //   queue -> a small "+N" in the bottom-right corner
 //
 // Fallback: with no clock SHP (gclock2.shp missing from the mixes) a bare
@@ -3222,7 +3231,7 @@ static void DrawPanel()
 
         if (g.Ghost.Building)
         {
-            DrawClock(pSurface, cellX + CAMEO_X, cellY + CAMEO_Y, g.Ghost.Step);
+            DrawClock(pSurface, cellX + CAMEO_X, cellY + CAMEO_Y, g.Ghost);
             DrawProgress(pSurface, cellX + CAMEO_X, cellY + CAMEO_Y, g.Ghost);
         }
         else if (Cfg().ShowCountChip)
@@ -3337,8 +3346,9 @@ static void DrawPanel()
                 if (icon.Building)
                 {
                     // Structure under construction: the engine's own gclock2
-                    // sweep over the cameo is the progress display.
-                    DrawClock(pSurface, cx, cy, icon.Step);
+                    // sweep over the cameo is the progress display. A finished
+                    // item gets no clock - DrawClock skips it.
+                    DrawClock(pSurface, cx, cy, icon);
                     DrawProgress(pSurface, cx, cy, icon);
                 }
                 else if (Cfg().ShowCountChip)
@@ -3446,6 +3456,35 @@ static void ToggleForgetPlacement()
     GlideForget(s_TglGlide);
 }
 
+// ------------------------------------------------------------ surface guard
+//
+// Does a w x h rect at (x, y) land entirely inside pSurface?
+//
+// The engine's PCX blit (PCX::BlitToSurface -> 0x6BA580) does NOT clip: it walks
+// the whole picture and computes every destination address as
+// Buffer + (y * pitch + x) * 2, ignoring the bounding rect's Width/Height. A
+// rect that pokes out of the surface therefore writes outside the surface
+// buffer - silently into whatever heap block sits in front of it, and into an
+// access violation once that runs past a committed page (the 0x6BA643 crash:
+// a spectator strip parked at (-W-4, -H-4) was still painted, 54 rows above the
+// buffer). The DSurface fill helpers are no safer, so everything this file
+// paints onto DSurface::Composite goes through this test first.
+//
+// Callers pass the ART's size for a PCX blit - the blit draws the art, not the
+// rect - and the filled rect's size for the FillRect fallbacks. Width/Height are
+// read from the members, not GetWidth()/GetHeight(): those members are the pitch
+// source the blit itself uses (pitch = Width * bytes-per-pixel), so they are the
+// bounds that actually matter.
+static bool FitsInSurface(const Surface* pSurface, int x, int y, int w, int h)
+{
+    if (!pSurface || w <= 0 || h <= 0)
+        return false;
+
+    return x >= 0 && y >= 0
+        && x + w <= pSurface->Width
+        && y + h <= pSurface->Height;
+}
+
 class WatchBarToggleButtonClass : public GadgetClass
 {
 public:
@@ -3523,6 +3562,24 @@ public:
         // OnPCX is the "sidebar is open" art and OffPCX the "collapsed" art.
         BSurface* pStrip = SidePCX(side, g_PanelOpen ? kSideArtOn : kSideArtOff);
 
+        // The engine paints this gadget in its own pass (GadgetClass::DrawAll),
+        // which is NOT in step with the placement the draw hook made above: the
+        // gate is re-read here, and a player who is defeated between the two
+        // calls turns spectator with the strip still parked at (-W-4, -H-4).
+        // Re-place once when the rect no longer fits the surface, and paint
+        // nothing if it still does not - the blit does not clip (see
+        // FitsInSurface), so a stale parked rect is an out-of-bounds write.
+        const int artW = pStrip ? pStrip->Width  : TOGGLE_W;
+        const int artH = pStrip ? pStrip->Height : TOGGLE_H;
+
+        if (!FitsInSurface(pSurface, this->X, this->Y, artW, artH))
+        {
+            this->UpdatePosition();
+
+            if (!FitsInSurface(pSurface, this->X, this->Y, artW, artH))
+                return true;   // still off the surface: paint nothing
+        }
+
         if (pStrip)
         {
             RectangleStruct dst { this->X, this->Y, TOGGLE_W, TOGGLE_H };
@@ -3531,11 +3588,39 @@ public:
         else
         {
             // Visible fallback so a missing PCX never makes the control vanish.
+            // A chevron pointing at the board, which is also what tells the two
+            // states apart without art: right while the board is collapsed (it
+            // unfolds to the right of the strip), left while it is open (the
+            // strip then rides the board's right edge).
             RectangleStruct dst { this->X, this->Y, TOGGLE_W, TOGGLE_H };
             pSurface->FillRect(&dst, CfgColor(Cfg().ToggleGlyphOffColor));
 
-            RectangleStruct inner { this->X + 1, this->Y + TOGGLE_H / 2 - 1, TOGGLE_W - 2, 2 };
-            pSurface->FillRect(&inner, CfgColor(Cfg().ToggleGlyphOnColor));
+            const COLORREF glyph = CfgColor(Cfg().ToggleGlyphOnColor);
+
+            // Solid, built from 2px columns: no font or SHP dependency, and it
+            // shrinks with the strip rather than spilling out of a small
+            // WatchBar.ToggleWidth / ToggleHeight.
+            int arms = TOGGLE_W / 2;
+            if (TOGGLE_H / 2 < arms)
+                arms = TOGGLE_H / 2;
+            if (arms > 4)
+                arms = 4;
+
+            const int span = arms * 2;
+            for (int c = 0; c < arms; ++c)
+            {
+                // Column c is the tail (tallest); the open state mirrors it so
+                // the tip flips to the left.
+                const int col = g_PanelOpen ? arms - 1 - c : c;
+                const int h   = span - 2 * c;
+
+                RectangleStruct bar {
+                    this->X + (TOGGLE_W - span) / 2 + col * 2,
+                    this->Y + (TOGGLE_H - h) / 2,
+                    2, h
+                };
+                pSurface->FillRect(&bar, glyph);
+            }
         }
 
         return true;
@@ -3657,14 +3742,15 @@ public:
           m_Up(up)
     { }
 
-    // Called from the draw hook before input is processed - the hit-box is
-    // the X/Y rect, so it must lead the painted art, not trail it. Also ticks
-    // the hold-to-repeat, which has no engine timer of its own.
-    void UpdatePosition()
+    // X/Y only, with no effect on the hold state, so Draw() can re-place a
+    // parked pair through it when the engine's own pass paints before the draw
+    // hook has moved it (see the toggle's Draw). The repeat tick deliberately
+    // stays out of here: re-running it from a paint would double the scroll
+    // rate.
+    void Place()
     {
         if (!BoardVisibleToMe() || !g_PanelOpen)
         {
-            m_Held = false;
             GlideForget(s_ArrowGlide);
             this->X = -SCROLL_BTN_W - 4;
             this->Y = -SCROLL_BTN_H - 4;
@@ -3680,6 +3766,20 @@ public:
         const int pairX = GlideTrack(s_ArrowGlide, ArrowPairX(m));
         this->X = m_Up ? pairX : pairX + SCROLL_BTN_W;
         this->Y = ArrowY(m);
+    }
+
+    // Called from the draw hook before input is processed - the hit-box is
+    // the X/Y rect, so it must lead the painted art, not trail it. Also ticks
+    // the hold-to-repeat, which has no engine timer of its own.
+    void UpdatePosition()
+    {
+        Place();
+
+        if (!BoardVisibleToMe() || !g_PanelOpen)
+        {
+            m_Held = false;
+            return;
+        }
 
         if (m_Held)
         {
@@ -3705,14 +3805,32 @@ public:
                                  : g_MaxScrollLines > 0
                                    && g_ScrollLines < g_MaxScrollLines;
 
-        RectangleStruct rect { this->X, this->Y, SCROLL_BTN_W, SCROLL_BTN_H };
-
         // WatchBar.UpPCX / DownPCX from the side's own rules section. One
         // picture per direction, so the button's state is carried by a wash
         // instead of a second file: dimmed = nothing to scroll that way, a
         // bright wash = held down.
-        if (BSurface* pArt = SidePCX(PanelSideIndex(),
-                                     m_Up ? kSideArtUp : kSideArtDown))
+        BSurface* pArt = SidePCX(PanelSideIndex(),
+                                 m_Up ? kSideArtUp : kSideArtDown);
+
+        // Same guard as the toggle's Draw: the engine's gadget pass can paint
+        // before the draw hook has moved the pair off the parked rect, and
+        // neither the blit nor the washes clip (see FitsInSurface). Re-place
+        // through Place() - never UpdatePosition(), whose repeat tick must not
+        // run from a paint - then paint nothing that still does not fit.
+        const int artW = pArt ? pArt->Width  : SCROLL_BTN_W;
+        const int artH = pArt ? pArt->Height : SCROLL_BTN_H;
+
+        if (!FitsInSurface(pSurface, this->X, this->Y, artW, artH))
+        {
+            this->Place();
+
+            if (!FitsInSurface(pSurface, this->X, this->Y, artW, artH))
+                return true;   // still off the surface: paint nothing
+        }
+
+        RectangleStruct rect { this->X, this->Y, SCROLL_BTN_W, SCROLL_BTN_H };
+
+        if (pArt)
         {
             PCX::Instance.BlitToSurface(&rect, pSurface, pArt);
 
