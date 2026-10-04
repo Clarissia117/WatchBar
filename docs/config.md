@@ -101,10 +101,9 @@ budget   = visLines + extra × 玩家数           // extra = 0 / 1 / 2（compac
 
 （每格 = 一个 cameo；`IconsPerLine=4` 时"行数 × 4 = 格数"。）
 
-8 人局下 `compact` 只有 4 格，默认 `GroupOrder` 里 `production` 占 2 格、`building` 再占
-2 格，部队块就全被截掉了：满员局一般该用 `loose` / `ultra`，并相应调小
-`WatchBar.MaxIconsPerGroup` 的建筑上限。`tools\check_ini.bat` 会在不启动游戏的情况下打印
-同一张表——它调用的是 `src/Config.h` 里同一份 `CfgVisLines` / `CfgAllocLines`。
+8 人局下 `compact` 只有 4 格，`production` 块（最多 5 格）加 `building` 块就能占满整行：
+满员局一般用 `loose` / `ultra`，并调小 `WatchBar.MaxIconsPerGroup`（例如
+`production:2,building:2`）。`tools\check_ini.bat` 可离线打印同一张表。
 
 ## 素材（rulesmd.ini）
 
@@ -168,7 +167,7 @@ File.Flag=C4_FLAG.PCX
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `WatchBar.ClockEnabled` | 1 | `1` = 绘制 gclock2 建造时钟（在造进度的唯一显示）；`0` = 在 cameo 中央显示百分比数字。造好待放置的格子不画时钟，只显示 `WatchBar.DoneText`。素材缺失时自动退回数字显示，无需修改此项 |
+| `WatchBar.ClockEnabled` | 1 | `1` = 绘制 gclock2 建造时钟（在造进度的唯一显示）；`0` = 在 cameo 中央显示百分比数字。建筑造好待放置的格子不画时钟，只显示 `WatchBar.DoneText`；单位造完不显示文字。素材缺失时自动退回数字显示 |
 
 ## 颜色
 
@@ -176,7 +175,7 @@ File.Flag=C4_FLAG.PCX
 |---|---|---|
 | `WatchBar.DoneColor` | 120,255,140 | 建筑造好、等待放置时的文字颜色 |
 | `WatchBar.ProgressTextColor` | 255,255,255 | 无时钟时显示的进度数字颜色 |
-| `WatchBar.QueueTextColor` | 205,205,205 | 排队数量 `+N` |
+| `WatchBar.QueueTextColor` | 255,255,255 | 在造格右上角 `+N` 角标的文字颜色（底板与数量角标同为 `CountChipColor`；N = 同类型还有几个在排队） |
 | `WatchBar.CountChipColor` | 36,36,36 | 单位数量角标的底板（也是 ▲▼ 不可滚动时的色罩） |
 | `WatchBar.CountTextColor` | 255,255,255 | 单位数量文字 |
 | `WatchBar.IdleTextColor` | 130,130,130 | 无对局数据时的占位文字（默认取 CSF `TXT_WAITING`） |
@@ -194,7 +193,7 @@ File.Flag=C4_FLAG.PCX
 
 | 键 | 默认 | 上限 | 说明 |
 |---|---|---|---|
-| `WatchBar.DoneText` | `TXT_READY` | 23 字符 | 建筑造好、等待放置时覆盖在图标上的文字（`WatchBar.DoneColor` 色，居中） |
+| `WatchBar.DoneText` | `TXT_READY` | 23 字符 | 建筑造好、等待放置时覆盖在图标上的文字（`WatchBar.DoneColor` 色，居中）。单位在造格不显示 |
 | `WatchBar.IdleText` | `TXT_WAITING` | 47 字符 | 尚无对局数据时的占位文字（`WatchBar.IdleTextColor` 色） |
 
 两个值都**先当作 CSF 标签查游戏字符串表**，查到就用表里的文本，因此默认值会跟随游戏
@@ -227,29 +226,32 @@ File.Flag=C4_FLAG.PCX
 
 ## 显示内容
 
-图标从左到右分为五块，默认顺序为在造建筑+军械 → 现存建筑 → 载具 → 飞机 → 步兵：
+图标从左到右分为五块，默认顺序为：
 
 ```
-在造建筑+军械(production) → 现存建筑(building) → 载具(vehicle)
-                          → 飞机(aircraft) → 步兵(infantry)
+建造中物件(production) → 现存建筑(building) → 现存载具(vehicle) → 现存战机(aircraft) → 现存步兵(infantry)
 ```
 
-每块内部各自排序（`SortMode`），块与块的先后由 `GroupOrder` 决定。按游戏侧边栏的页签
-顺序（建筑 → 军械 → 步兵 → 载具）排列可写
-`WatchBar.GroupOrder=production,building,infantry,vehicle,aircraft`。
+`production` 块内顺序默认为：建筑 → 军械 → 载具 → 战机 → 步兵（与块的顺序一致，不参与
+`SortMode`，`WatchBar.ProductionOrder` 可调），每类最多一格、只在造时占格。舰船并入
+载具格：船厂与战车工厂同时在造时，该格显示进度靠前的一条。
+
+其余每块内部按 `SortMode` 排序，块与块的先后由 `GroupOrder` 决定。
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `WatchBar.ShowStructures` | 1 | 显示正在建造的建筑/军械（`production` 块，最多两格：建筑页签与军械页签，带 gclock2 进度时钟）。此项控制"在造"，已建成的建筑由 `CountBuilding` 控制 |
-| `WatchBar.ShowUnits` | 1 | 单位块的总开关，`infantry` / `vehicle` / `aircraft` 三块都受它控制。关闭后只剩建造进度 |
-| `WatchBar.CountBuilding` | 0 | `1` = 已建成并站在地图上的建筑也计数（`building` 块，每种一个图标与数量）。独立于 `ShowUnits`。围墙、激光墙、火风暴墙不计，工厂内尚未放置的不计，防御建筑照常计数 |
+| `WatchBar.ShowStructures` | 1 | 显示正在建造的建筑与防御建筑（`production` 块）。与 `CountBuilding`（现存建筑）相互独立 |
+| `WatchBar.ShowUnitProduction` | 0 | 显示正在生产的载具/战机/步兵（`production` 块）。与 `ShowUnits`、`Count*` 相互独立：只看在造可写 `ShowUnits=0` + 本项 1。单位造完不显示 `DoneText` |
+| `WatchBar.ShowUnits` | 1 | 单位计数块的总开关：控制载具、战机、步兵三块。单位在造格由 `ShowUnitProduction` 控制 |
+| `WatchBar.CountBuilding` | 0 | `1` = 计数现存建筑（`building` 块，每种一个图标与数量）。独立于 `ShowUnits`。围墙、激光墙、火风暴墙不计，工厂内尚未放置的不计，防御建筑照常计数 |
 | `WatchBar.CountInfantry` | 1 | 步兵块计数，仅在 `ShowUnits=1` 时生效 |
 | `WatchBar.CountVehicle` | 1 | 载具块计数（地面与水面），条件同上 |
-| `WatchBar.CountAircraft` | 1 | 飞机块计数，条件同上 |
-| `WatchBar.MaxIconsPerGroup` | `building:3` | 每一块最多占几格（显示上限）。逗号列表 `<组名>:<格数>`，格数 1..128，未列出的组不封顶。默认只给建筑封顶：建筑是唯一会大量增多的块（中后期一个基地 8~15 种），不封顶会把部队挤出整行。留空 = 保持默认，不是取消封顶。例：`building:2,infantry:4` |
-| `WatchBar.GroupOrder` | `production,building,vehicle,aircraft,infantry` | 五块从左到右的顺序。逗号分隔，五个组名必须各写一次；写错、重复或漏写时保留默认顺序并记一行日志。排在最后的块最先被整行格数截断 |
-| `WatchBar.ShowCountChip` | 1 | 显示数量角标。关闭后只有图标，不显示数量 |
-| `WatchBar.SortMode` | `tech` | `tech` = 科技等级高到低；`count` = 数量多到少；`name` = 规则名 A 到 Z。每块各自排序，块间顺序由 `GroupOrder` 决定，在造图标跟随 `production` 块。键值相同时按规则顺序排列，保证顺序稳定 |
+| `WatchBar.CountAircraft` | 1 | 战机块计数，条件同上 |
+| `WatchBar.MaxIconsPerGroup` | `building:3` | 每类别最多占几格，逗号列表 `<组名>:<格数>`，未列出的组不封顶。默认只给建筑封顶（中后期一个基地 8~15 种）。例：`building:2,infantry:4`。`production` 默认不封顶（最多 5 格），`production:2` 可还原 1.3 的两格观感 |
+| `WatchBar.GroupOrder` | `production,building,vehicle,aircraft,infantry` | 每个类别的排列顺序，五个组名必须各写一次；写错、重复或漏写时保留默认顺序并记一行日志。排在最后的块最先被整行格数截断 |
+| `WatchBar.ProductionOrder` | `building,ordnance,vehicle,aircraft,infantry` | production 块内顺序，五个名称必须各写一次；写错、重复或漏写时保留默认顺序并记一行日志。排在最后的格最先被 production 上限截断 |
+| `WatchBar.ShowCountChip` | 1 | 显示数量角标。关闭后只有图标，不显示数量（在造格的 `+N` 角标不受影响） |
+| `WatchBar.SortMode` | `tech` | `tech` = 科技等级高到低；`count` = 数量多到少；`name` = 规则名 A 到 Z。每块各自排序，在造块不参与排序。键值相同时按规则顺序排列，保证顺序稳定 |
 
 ### 显示上限
 
@@ -261,14 +263,16 @@ File.Flag=C4_FLAG.PCX
 面板内部按类型记账：一种类型一个数字，`SortMode` 决定块内顺序。除上述两项外没有统计
 上限参数，正常对局不会触及内部容量。
 
-`ShowUnits=0` 时 `CountInfantry` / `CountVehicle` / `CountAircraft` 全部无效；
-`CountBuilding=0` 时建筑块的 `MaxIconsPerGroup` 无效。这两种"已写但不生效"的组合，解析器
-会在 `WatchBar.log` 与 `tools\check_ini.bat` 中各记一行。只想显示某一类（例如只显示对方
-防线）可写 `CountBuilding=1` + `ShowUnits=0`，或反过来只留单位。
+`ShowUnits=0` 时 `CountInfantry` / `CountVehicle` / `CountAircraft` 全部无效（单位的
+在造格不受影响，由 `ShowUnitProduction` 控制）；`CountBuilding=0` 时建筑块的
+`MaxIconsPerGroup` 无效。这两种"已写但不生效"的组合，解析器会在 `WatchBar.log` 与
+`tools\check_ini.bat` 中各记一行。只想显示某一类（例如只显示对方防线）可写
+`CountBuilding=1` + `ShowUnits=0`；只看正在生产什么、不要兵力普查可写
+`ShowStructures=0` + `ShowUnitProduction=1` + `ShowUnits=0`。
 
-同一种类型在一行中只占一格：某个建筑正在建造、地图上又有同类建筑时（例如第二个重工），
-该行只显示在造的那一格（带进度时钟），数量角标等它造好放下后恢复。原因是面板的动画表按
-(玩家, 类型) 记录图标，同一类型占两格会争用同一个动画位。
+同一种建筑类型在一行中只占一格：建筑在造、地图上又有同类建筑时，只显示在造格（带进度
+时钟），数量角标等它造好放下后恢复。单位不受此限：同种单位"在造 + 现存"两格同时显示
+（动画表按 玩家 × 类型 × 是否在造格 记录）。
 
 ## rules 中的按类型键
 
@@ -293,7 +297,7 @@ File.Flag=C4_FLAG.PCX
 `IgnoreCount=yes` 在三个环节生效：自身单位不进入计数桶（在 `CountAs` 合并之前过滤，因此
 被忽略的类型不会计入它转向的目标）；作为 `CountAs` 的目标时也不计数（合并之后再过滤
 一次）：`A` 写 `CountAs=B`、`B` 写 `IgnoreCount=yes` 时，`A` 同样不显示；正在建造的图标
-也不绘制（`CollectStructureProduction` 同样跳过）。
+也不绘制（`CollectProduction` 同样跳过，在造格一并消失）。
 
 只想屏蔽某一类（例如不要建筑）时使用 `WatchBar.Count*` 开关；`IgnoreCount` 是按类型
 屏蔽整个类型。
@@ -342,7 +346,7 @@ File.Flag=C4_FLAG.PCX
 | `WatchBar.LogPath` | 空 | 留空 = `<游戏根目录>\WatchBar.log` |
 
 无法识别的键名、越界的数字、格式错误的颜色都记录在日志中。日志第一行是版本横幅
-（`==== WatchBar 1.3.3 (编译日期 时间) ====`），随后一行记录读到的键数与来源；版本号固定
+（`==== WatchBar 1.4.0 (编译日期 时间) ====`），随后一行记录读到的键数与来源；版本号固定
 内置在程序里，不是参数。
 
 ## 兼容性自检

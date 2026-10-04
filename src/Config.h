@@ -43,7 +43,7 @@
 #include <windows.h>
 
 // ---------------------------------------------------------------- version
-#define WATCHBAR_VERSION "1.3.3"
+#define WATCHBAR_VERSION "1.4.0"
 
 // The host this build hooks: YR 1.001 gamemd.exe. The two hook sites are
 // absolute addresses in that build, so a different exe is a warning, not a
@@ -57,7 +57,11 @@ enum
     kHardMaxRows           = 8,   // YR supports 8 players
     kHardMaxLinesPerPlayer = 8,   // rows in one player's grid
     kHardMaxIconsPerLine   = 16,  // columns in one player's grid
-    kHardMaxCells         = kHardMaxLinesPerPlayer * kHardMaxIconsPerLine,
+    kHardMaxCells          = kHardMaxLinesPerPlayer * kHardMaxIconsPerLine,
+    kHardMaxProdCells      = 5,   // production cells, one per category the board
+                                  // shows: structure tab, defence tab, vehicles
+                                  // (ships included - they are UnitType and land
+                                  // in the vehicle cell), aircraft, infantry
     kHardMaxTypesPerGroup = 64,  // Types tallied per group. INTERNAL: it sizes the
                                  // tally arrays and is neither a parameter nor a
                                  // display limit. A player fielding 64 distinct
@@ -154,8 +158,11 @@ enum WatchBarParticipantRows
 // The blocks a row is built from, in the order [WatchBar] GroupOrder lists
 // them. The names are the ones the ini keys use, so the mapping is readable
 // without a lookup table:
-//   production - the two production cells (structure tab, then ordnance tab);
-//                they always travel together and keep that internal order
+//   production - the in-production cells, one per category, ordered by
+//                WatchBar.ProductionOrder (see WatchBarProdCell below).
+//                ShowStructures gates the two structure cells,
+//                ShowUnitProduction the three unit cells; GroupOrder only
+//                decides where the block sits on the row
 //   building   - counted buildings (WatchBar.CountBuilding), capped by
 //                MaxIconsPerGroup like every other block
 //   infantry / vehicle / aircraft - the three counted unit groups
@@ -167,6 +174,20 @@ enum WatchBarIconGroup
     kGroupVehicle,
     kGroupAircraft,
     kGroupCount
+};
+
+// --------------------------------------------------------- production cells
+// The five cells the production block can hold, in the shipped order (kHardMaxProdCells
+// in the hard caps above is the count). WatchBar.ProductionOrder is a permutation
+// of these; the names are the ones the ini value uses.
+enum WatchBarProdCell
+{
+    kProdCellBuilding = 0,   // the structure tab
+    kProdCellOrdnance,       // the defence tab
+    kProdCellVehicle,        // ground vehicles and ships
+    kProdCellAircraft,       // the helipad line
+    kProdCellInfantry,       // the barracks line
+    kProdCellCount
 };
 
 // --------------------------------------------------------- settings source
@@ -255,7 +276,8 @@ struct WatchBarConfig
     // WatchBar.DoneColor, WatchBar.ProgressTextColor, ...
     WatchBarColor DoneColor;         // finished, waiting to be placed
     WatchBarColor ProgressTextColor; // fallback digits when gclock2 is missing
-    WatchBarColor QueueTextColor;    // "+N" queued depth
+    WatchBarColor QueueTextColor;    // the "+N" queue badge's digits (its chip
+                                     // is CountChipColor, like the count badge)
     WatchBarColor CountChipColor;    // backing plate of the alive-count badge
     WatchBarColor CountTextColor;
     WatchBarColor IdleTextColor;     // "waiting for match..."
@@ -298,8 +320,17 @@ struct WatchBarConfig
     int ScanIntervalMs;      // WatchBar.ScanIntervalMs: 0 = rescan every frame
 
     // ---- content ----------------------------------------------------------
-    // WatchBar.ShowStructures, WatchBar.CountBuilding, ...
-    int ShowStructures;      // include structures under construction
+    // WatchBar.ShowStructures, WatchBar.ShowUnitProduction, ...
+    int ShowStructures;      // include structures under construction (the two
+                             // structure cells of the production block)
+    int ShowUnitProduction;  // include vehicles/aircraft/infantry production
+                             // (the three unit cells of the production block).
+                             // Off by default: the block ships with the two
+                             // structure cells only, so an existing board keeps
+                             // its look. Independent of ShowUnits and of the
+                             // Count* keys, exactly as ShowStructures is
+                             // independent of CountBuilding: "in production"
+                             // and "on the map" are two separate questions
     int ShowUnits;           // master switch for the fielded UNIT groups
     int CountBuilding;       // + buildings standing on the map (own group)
     int CountInfantry;       // + infantry, when ShowUnits is on
@@ -320,6 +351,11 @@ struct WatchBarConfig
                                   // left-to-right order of the row's blocks.
                                   // The LAST group in the list is the first to
                                   // be cut when the row runs out of cells.
+    int ProductionOrder[kHardMaxProdCells];  // WatchBarProdCell values, one each:
+                                  // left-to-right order of the production
+                                  // block's cells (default building, ordnance,
+                                  // vehicle, aircraft, infantry). The LAST cell
+                                  // listed is the first the production cap cuts.
 
     // ---- gate -------------------------------------------------------------
     // WatchBar.SpectatorOnly / WatchBar.ParticipantRows / WatchBar.ShowWhenDefeated

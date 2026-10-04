@@ -5,24 +5,32 @@
 // label column (country flag + player id) followed by a DYNAMIC strip of
 // cameo icons, four per line, wrapping to a second line when needed:
 //
-//   [structures being built, gclock2 production clock]
-//   [defence structures being built, gclock2 production clock]
-//   [buildings standing on the map, alive count]      <- CountBuilding=1
+//   [structures being built, gclock2 production clock]     <- ShowStructures
+//   [defence structures being built, gclock2 clock]        <- ShowStructures
+//   [vehicles being built, gclock2 production clock]       <- ShowUnitProduction
+//   [aircraft being built, gclock2 production clock]       <- ShowUnitProduction
+//   [infantry being trained, gclock2 production clock]     <- ShowUnitProduction
+//   [buildings standing on the map, alive count]           <- CountBuilding=1
 //   [vehicles / ships on the map, alive count in the top-right]
 //   [aircraft on the map, alive count in the top-right]
 //   [infantry on the map, alive count in the top-right]
 //
-// Structures only appear while they are actually in production - a player who
-// builds nothing shows no structure icon. Counted groups appear by their
+// Production cells appear only while the line is actually producing - a player
+// who builds nothing shows no production icon. The five cells are the board's
+// five categories (structures, defences, vehicles, aircraft, infantry),
+// ordered by WatchBar.ProductionOrder (default: the same order the counted
+// blocks use); ships are UnitType and land in the vehicle
+// cell (the engine runs the naval line separately from the war factory, so the
+// cell shows the more advanced of the two). Counted groups appear by their
 // on-map presence: one icon per distinct type, badged with how many are alive.
-// Which groups exist is WatchBar.ShowStructures for the production icons,
-// WatchBar.ShowUnits (master) plus WatchBar.CountInfantry / CountVehicle /
-// CountAircraft for the unit groups, WatchBar.CountBuilding for the building
-// group; the order the blocks are laid out in is WatchBar.GroupOrder, and the
-// default above is the layout this board has always drawn (vehicles and the
-// aircraft that ride with them ahead of the infantry). WatchBar.MaxIconsPerGroup
-// caps each block (buildings ship with a cap of 3, the one group that can grow
-// without bound).
+// Which groups exist is WatchBar.ShowStructures for the two structure cells,
+// WatchBar.ShowUnitProduction for the three unit cells, WatchBar.ShowUnits
+// (master) plus WatchBar.CountInfantry / CountVehicle / CountAircraft for the
+// unit groups, WatchBar.CountBuilding for the building group; the order the
+// blocks are laid out in is WatchBar.GroupOrder, and the default above is the
+// layout this board has always drawn (vehicles and the aircraft that ride with
+// them ahead of the infantry). WatchBar.MaxIconsPerGroup caps each block
+// (buildings ship with a cap of 3, the one group that can grow without bound).
 // Types with no drawable cameo (no CameoPCX=, no real Cameo= SHP) are skipped
 // by the collector entirely: an empty recess with a bare percentage or count
 // reads as a rendering glitch, not as information.
@@ -254,7 +262,7 @@ static void LogLine(const char* fmt, ...)
 // is what the readouts were tuned against at the 60x48 cameo size.
 #define kFont      TextPrintType::Point8      // the count badge (needs to read)
 #define kFontSmall TextPrintType::Point6Grad  // progress text, idle placeholder
-#define kFontTiny  TextPrintType::Point6Grad  // "+N", player names
+#define kFontTiny  TextPrintType::Point6Grad  // player names
 
 static COLORREF CfgColor(const WatchBarColor& c)
 {
@@ -302,19 +310,26 @@ static int BandBottom()
 // rules - see FlagPCX below, the only place that resolves one.
 
 // ---------------------------------------------------------------- row model
-// One icon in a row's dynamic list. It is either a structure being built
+// One icon in a row's dynamic list. It is either an item in production
 // (Building = true: progress readout, Count is the queue depth behind it) or a
 // counted type standing on the map - a unit or, with CountBuilding=1, a
 // building (Building = false: alive count readout).
 struct RowIcon
 {
     TechnoTypeClass* Type;
-    int              Count;    // units: alive count; structures: queued depth
-    int              Pct;      // structures: 0..99 build progress (100 = done)
-    int              Step;     // structures: raw production step 0..54, the
+    int              Count;    // units: alive count; production: how many more
+                               // of THIS type are queued behind the current one
+    int              Pct;      // production: 0..99 build progress (100 = done)
+    int              Step;     // production: raw production step 0..54, the
                                // gclock2 frame index driver (see DrawClock)
-    bool             Done;     // structures: finished, waiting to be placed
+    bool             Done;     // production: finished, leaving the factory
     bool             Building; // true = draw progress, false = draw count
+    bool             AutoExit; // production: the product leaves the factory on
+                               // its own (vehicles, aircraft, infantry - ships
+                               // are vehicles), so there is no placement step
+                               // and the done state draws no DoneText - the
+                               // item rolls out and the cell moves on or
+                               // disappears
 };
 
 struct PlayerRow
@@ -665,33 +680,51 @@ static const char* ParticipantRowsName(int mode)
     }
 }
 
-// Which production group a factory item lands in on this board:
-//   0 = structures (the building tab), 1 = ordnance (the defence tab),
-//  -1 = not shown. Units and aircraft are NOT shown from production any more -
-//      what a player produces shows up on the map a moment later, and the
-//      on-map counts are the point of the new board.
-static int ProdGroupOf(TechnoTypeClass* pType)
+// Which production cell a factory item lands on (WatchBarProdCell, Config.h).
+// Ships are UnitType, so they land in the vehicle cell like ground vehicles:
+// the engine runs the naval line separately from the war factory, and the cell
+// shows the more advanced of the two.
+//
+// This is the cell's IDENTITY; the order the cells are drawn in is
+// WatchBar.ProductionOrder.
+static int ProdCellOf(TechnoTypeClass* pType)
 {
-    if (pType->WhatAmI() != AbstractType::BuildingType)
-        return -1;
+    switch (pType->WhatAmI())
+    {
+    case AbstractType::BuildingType:
+    {
+        // The game's own lookup is authoritative for which tab a building lands
+        // on (defences go to the ordnance tab); the fallback below is the same
+        // rule the sidebar itself applies: BuildCat::Combat means defence.
+        const int tab = SidebarClass::GetObjectTabIdx(AbstractType::BuildingType,
+            static_cast<BuildingTypeClass*>(pType)->BuildCat, false);
 
-    // The game's own lookup is authoritative for which tab a building lands on
-    // (defences go to the ordnance tab); the fallback below is the same rule
-    // the sidebar itself applies: BuildCat::Combat means defence.
-    const int tab = SidebarClass::GetObjectTabIdx(AbstractType::BuildingType,
-        static_cast<BuildingTypeClass*>(pType)->BuildCat, false);
+        if (tab == 0 || tab == 1)
+            return tab;
 
-    if (tab == 0 || tab == 1)
-        return tab;
+        return static_cast<BuildingTypeClass*>(pType)->BuildCat == BuildCat::Combat
+            ? kProdCellOrdnance : kProdCellBuilding;
+    }
 
-    return static_cast<BuildingTypeClass*>(pType)->BuildCat == BuildCat::Combat ? 1 : 0;
+    case AbstractType::UnitType:
+        return kProdCellVehicle;
+
+    case AbstractType::AircraftType:
+        return kProdCellAircraft;
+
+    case AbstractType::InfantryType:
+        return kProdCellInfantry;
+
+    default:
+        return -1;   // factories only ever produce techno types; defensive
+    }
 }
 
 // Defined in the type-rules section below (it needs the rules INI and its
 // per-match cache): is this type marked IgnoreCount=yes, i.e. off the board?
 static bool TypeIsIgnored(TechnoTypeClass* pType);
 
-// Structures currently in production for one player.
+// Items currently in production for one player, one cell per category.
 //
 // This walks FactoryClass::Array directly instead of going through
 // HouseClass::GetPrimaryFactory. The lookup variant requires (AbstractType,
@@ -699,13 +732,15 @@ static bool TypeIsIgnored(TechnoTypeClass* pType);
 // yields no production lines at all. The array is authoritative: it holds every
 // factory in the match, so filtering by Owner cannot miss one.
 //
-// out[0] is the structure group, out[1] the ordnance group. If a group somehow
-// reports two factories, the more advanced line wins so the row shows real
-// progress rather than whichever came last in the array.
-static void CollectStructureProduction(HouseClass* pHouse, RowIcon out[2])
+// out[] is indexed by WatchBarProdCell (Config.h), so a cell's slot is its
+// identity, not its position on the row - WatchBar.ProductionOrder decides the
+// drawing order. The vehicle cell can legitimately see two lines at once (a war
+// factory and a naval yard build in parallel); the more advanced line wins so
+// the cell shows real progress.
+static void CollectProduction(HouseClass* pHouse, RowIcon out[kHardMaxProdCells])
 {
-    out[0] = RowIcon {};
-    out[1] = RowIcon {};
+    for (int i = 0; i < kHardMaxProdCells; ++i)
+        out[i] = RowIcon {};
 
     for (auto pFactory : FactoryClass::Array)
     {
@@ -713,7 +748,8 @@ static void CollectStructureProduction(HouseClass* pHouse, RowIcon out[2])
             continue;
 
         // The item on the line. Object is set while building and stays set
-        // after completion until the player places it.
+        // until the product leaves the factory (units exit on their own,
+        // structures wait to be placed).
         TechnoTypeClass* pType = nullptr;
 
         if (pFactory->Object)
@@ -731,8 +767,8 @@ static void CollectStructureProduction(HouseClass* pHouse, RowIcon out[2])
         if (TypeIsIgnored(pType))
             continue;
 
-        const int group = ProdGroupOf(pType);
-        if (group < 0)
+        const int cell = ProdCellOf(pType);
+        if (cell < 0)
             continue;
 
         // Progress is measured in 54 steps - hardcoded in the game, and the
@@ -745,7 +781,7 @@ static void CollectStructureProduction(HouseClass* pHouse, RowIcon out[2])
         int pct;
         if (done)
         {
-            pct = 100;   // finished, waiting to be placed
+            pct = 100;   // finished, about to leave the factory
         }
         else
         {
@@ -757,16 +793,28 @@ static void CollectStructureProduction(HouseClass* pHouse, RowIcon out[2])
         const int step = done ? 54
                               : (progress < 0 ? 0 : (progress > 53 ? 53 : progress));
 
-        RowIcon& slot = out[group];
+        RowIcon& slot = out[cell];
         if (slot.Type && slot.Pct >= pct)
             continue;
+
+        // How many MORE of this type are queued behind it. The queue can hold
+        // several types at once and only the current one is on the cell, so a
+        // straight QueuedObjects.Count would add other types' clicks to this
+        // cell's number; count the matching entries only.
+        int queuedSame = 0;
+        for (int i = 0; i < pFactory->QueuedObjects.Count; ++i)
+        {
+            if (pFactory->QueuedObjects[i] == pType)
+                ++queuedSame;
+        }
 
         slot.Type     = pType;
         slot.Pct      = pct;
         slot.Step     = step;
         slot.Done     = done;
         slot.Building = true;
-        slot.Count    = pFactory->QueuedObjects.Count;   // items behind this one
+        slot.AutoExit = cell >= kProdCellVehicle;   // units exit on their own
+        slot.Count    = queuedSame;   // same-type items behind this one
     }
 }
 
@@ -982,8 +1030,8 @@ static void CollectBuildings(HouseClass* pHouse, UnitBucketEntry* bucket, int& c
 //   - a CountAs redirect INTO an ignored type is dropped as well (the same
 //     pass, run again after the merge): "count A as B" where B is ignored
 //     counts as nothing;
-//   - its production icon is skipped too (CollectStructureProduction), so the
-//     type cannot reappear on the board as a structure under construction.
+//   - its production icon is skipped too (CollectProduction), so the
+//     type cannot reappear on the board as an item under construction.
 //
 // Both keys are read from the game's own loaded rules (CCINIClass::INI_Rules),
 // once per type per match, through the same pattern the cameo code uses:
@@ -1318,13 +1366,21 @@ static bool BucketBefore(const UnitBucketEntry& a, const UnitBucketEntry& b)
 // without one never gets a cell at all.
 static bool HasDrawableCameo(TechnoTypeClass* pType);
 
-// A type that already has a production cell on this row is skipped: the board
-// shows ONE cell per type, and the animation table keys its records by
-// (house, type) - two cells of the same type would be drawn on top of each
-// other at one animated slot. Production wins over the count because the
-// progress clock is the time-sensitive half, and the case only exists while a
-// player is building a type they already have (a second War Factory, a fifth
-// pillbox): the count is back the moment the structure is placed.
+// A BUILDING type that already has a production cell on this row is skipped in
+// the building group: the board shows ONE cell per building type, and the
+// animation table keys its records by (house, type, production flag) - two
+// cells of the same key would be drawn on top of each other at one animated
+// slot. Production wins over the count because the progress clock is the
+// time-sensitive half, and the case only exists while a player is building a
+// type they already have (a second War Factory, a fifth pillbox): the count is
+// back the moment the structure is placed.
+//
+// The counted UNIT groups do NOT get this filter, and deliberately so: a
+// player produces units continuously, so "in production" there is a steady
+// state rather than a transient one - hiding the fielded count of every type
+// that is being built would blank the army exactly while the army is growing.
+// Both cells may show one type at once; the animation key's third component
+// keeps their slots apart.
 static bool HasProductionCell(const RowIcon* prodIcons, int nProdIcons, TechnoTypeClass* pType)
 {
     for (int i = 0; i < nProdIcons; ++i)
@@ -1384,24 +1440,33 @@ static int AppendCountedGroup(RowIcon* out, UnitBucketEntry* bucket, int count,
 static void CollectRow(PlayerRow& r)
 {
     const bool wantStructures = Cfg().ShowStructures != 0;
+    const bool wantUnitProd   = Cfg().ShowUnitProduction != 0;
     const bool wantUnits      = Cfg().ShowUnits != 0;
 
     // ---- production cells
     //
-    // The two the game's sidebar calls structures and armour. They always
-    // travel together and keep this internal order; GroupOrder only decides
-    // where the PAIR sits on the row. Collecting them up front (rather than in
-    // place) also lets the counted groups filter against them whatever their
-    // position: the board shows one cell per type, and production wins it.
-    RowIcon prod[2] = {};
+    // Up to kHardMaxProdCells of them, one per category, in the order
+    // WatchBar.ProductionOrder lists (default: structures, defences, vehicles,
+    // aircraft, infantry - the same order the counted blocks use). The last
+    // cell listed is the first the production cap cuts. ShowStructures gates
+    // the two structure cells, ShowUnitProduction the three unit cells.
+    // Collecting them up front (rather than in place) also lets the building
+    // group filter against them whatever their position: the board shows one
+    // cell per building type, and production wins it.
+    RowIcon prod[kHardMaxProdCells];
     int nProd = 0;
-    if (wantStructures)
+    if (wantStructures || wantUnitProd)
     {
-        RowIcon slots[2] = {};
-        CollectStructureProduction(r.House, slots);
-        for (int g = 0; g < 2; ++g)
+        RowIcon slots[kHardMaxProdCells];
+        CollectProduction(r.House, slots);
+        for (int i = 0; i < kHardMaxProdCells; ++i)
         {
-            if (slots[g].Type && HasDrawableCameo(slots[g].Type))
+            const int g = Cfg().ProductionOrder[i];
+            if (!slots[g].Type)
+                continue;
+            if (!(g <= kProdCellOrdnance ? wantStructures : wantUnitProd))
+                continue;
+            if (HasDrawableCameo(slots[g].Type))
                 prod[nProd++] = slots[g];
         }
     }
@@ -1458,13 +1523,16 @@ static void CollectRow(PlayerRow& r)
     const int drawProd = nProd;
 
     int drawBld = 0, drawInf = 0, drawVeh = 0, drawAir = 0;
+    // Only the building group deduplicates against the production cells (see
+    // HasProductionCell): for units, "in production" and "on the map" are
+    // both steady states, so both cells may show one type at once.
     const int showBld = AppendCountedGroup(gBld, buildings, nBuildings, prod, nProd,
                                            Cfg().MaxIconsPerGroup[kGroupBuilding], drawBld);
-    const int showInf = AppendCountedGroup(gInf, infantry, nInfantry, prod, nProd,
+    const int showInf = AppendCountedGroup(gInf, infantry, nInfantry, nullptr, 0,
                                            Cfg().MaxIconsPerGroup[kGroupInfantry], drawInf);
-    const int showVeh = AppendCountedGroup(gVeh, vehicles, nVehicles, prod, nProd,
+    const int showVeh = AppendCountedGroup(gVeh, vehicles, nVehicles, nullptr, 0,
                                            Cfg().MaxIconsPerGroup[kGroupVehicle], drawVeh);
-    const int showAir = AppendCountedGroup(gAir, aircraft, nAircraft, prod, nProd,
+    const int showAir = AppendCountedGroup(gAir, aircraft, nAircraft, nullptr, 0,
                                            Cfg().MaxIconsPerGroup[kGroupAircraft], drawAir);
 
     // ---- lay the blocks out in the configured order
@@ -1472,7 +1540,7 @@ static void CollectRow(PlayerRow& r)
     // Every group is already capped, so this is a copy; the only limit left is
     // the row itself, and it takes cells off the tail - the last group in
     // GroupOrder loses first.
-    RowIcon all[2 + 4 * kHardMaxCells];
+    RowIcon all[kHardMaxProdCells + 4 * kHardMaxCells];
     int n = 0;
 
     for (int slot = 0; slot < kGroupCount; ++slot)
@@ -2501,7 +2569,8 @@ static bool ClockReady()
     return pClock && pClock->Frames > 0;
 }
 
-// The production clock (gclock2) over a structure cameo.
+// The production clock (gclock2) over a production cameo - structure or unit
+// line alike.
 //
 // Replicates the engine's own sidebar clock draw verbatim - disassembly at
 // 0x6A9E4A: frame = production step + 1, palette FileSystem::SIDEBAR_PAL,
@@ -2540,15 +2609,20 @@ static void DrawClock(DSurface* pSurface, int cx, int cy, const RowIcon& icon)
         0, 0, ZGradient::Ground, 1000, 0, nullptr, 0, 0, 0);
 }
 
-// Readout for a structure cameo.
+// Readout for a production cameo.
 //
 // The gclock2 sweep is the progress display, so no percentage is drawn on top of
 // it (the two would report the same number). What remains as text:
 //
-//   done -> the WatchBar.DoneText string in green, centred. No clock is drawn
-//           underneath it (see DrawClock): a full clock still reads as
-//           "building" to anyone who did not watch the sweep complete
-//   queue -> a small "+N" in the bottom-right corner
+//   done (a structure) -> the WatchBar.DoneText string in green, centred. No
+//           clock is drawn underneath it (see DrawClock): a full clock still
+//           reads as "building" to anyone who did not watch the sweep complete
+//   done (a unit line) -> nothing in the centre. The product leaves the factory
+//           on its own, so there is no placement to announce; the cell moves on
+//           to the next queued item or disappears (AutoExit)
+//
+// The queue depth is NOT drawn here: it is the corner badge the caller draws
+// (DrawBadge with the + prefix), same slot as the fielded units' count.
 //
 // Fallback: with no clock SHP (gclock2.shp missing from the mixes) a bare
 // progress number is drawn instead, so the icon never goes mute about its
@@ -2558,17 +2632,15 @@ static void DrawProgress(DSurface* pSurface, int x, int y, const RowIcon& icon)
     wchar_t buf[64];
     bool centre = false;
 
-    // Shared with the "+N" suffix below, which anchors on the small font's
-    // height whether or not a centre text is drawn this frame.
     const int th = TextHeight(kFontSmall);
 
-    if (icon.Done)
+    if (icon.Done && !icon.AutoExit)
     {
         // WatchBar.DoneText, a CSF label by default (TXT_READY = "就绪").
         lstrcpynW(buf, DoneText(), 64);
         centre = true;
     }
-    else if (!ClockReady())
+    else if (!icon.Done && !ClockReady())
     {
         // Bare number: the '%' glyph never survives the font routing in
         // practice, so the fallback does not pretend otherwise.
@@ -2590,27 +2662,22 @@ static void DrawProgress(DSurface* pSurface, int x, int y, const RowIcon& icon)
 
         DrawString(pSurface, buf, tx, ty, col, kFontSmall);
     }
-
-    // Queued count stays out of the centre so it never collides with the
-    // clock sweep, and hugs the corner where it reads as a suffix.
-    if (icon.Count > 0)
-    {
-        wsprintfW(buf, L"+%d", icon.Count);
-        const int qw = TextWidth(buf, kFontTiny);
-        DrawString(pSurface, buf, x + CAMEO_W - qw - 2, y + CAMEO_H - th - 1,
-                   CfgColor(Cfg().QueueTextColor), kFontTiny);
-    }
 }
 
-// Alive-count badge for a unit cameo, in the top-right corner - the same
-// convention the reference mock-up uses. Sits on a small grey-black chip so
-// it stays legible over any cameo art. Point8 (the game's standard UI font)
-// rather than the smaller progress font: the count is the whole point of a
-// unit icon and must read at a glance.
-static void DrawCount(DSurface* pSurface, int x, int y, int count)
+// Badge in a cameo's top-right corner - the same convention the reference
+// mock-up uses. Sits on a small grey-black chip so it stays legible over any
+// cameo art. Point8 (the game's standard UI font) rather than the smaller
+// progress font: the number is the whole point of the badge and must read at
+// a glance.
+//
+// One renderer for both numbers on the board: the alive count of a fielded
+// type, and - with the + prefix - how many more of a production cell's type
+// are queued behind it. Same chip, font and position, so the two read as one
+// family; the + is the only difference.
+static void DrawBadge(DSurface* pSurface, int x, int y, int count, bool plus)
 {
     wchar_t buf[16];
-    wsprintfW(buf, L"%d", count);
+    wsprintfW(buf, plus ? L"+%d" : L"%d", count);
 
     const int tw = TextWidth(buf, kFont);
     const int th = TextHeight(kFont);
@@ -2621,7 +2688,7 @@ static void DrawCount(DSurface* pSurface, int x, int y, int count)
     pSurface->FillRect(&chip, CfgColor(Cfg().CountChipColor));
 
     DrawString(pSurface, buf, x + CAMEO_W - tw - 5, y + 1,
-               CfgColor(Cfg().CountTextColor), kFont);
+               CfgColor(plus ? Cfg().QueueTextColor : Cfg().CountTextColor), kFont);
 }
 
 // ------------------------------------------------------------------ metrics
@@ -2761,6 +2828,10 @@ struct IconAnim
     bool             Used;
     HouseClass*      House;
     TechnoTypeClass* Type;
+    bool             Production;   // key part: the PRODUCTION cell of a type is
+                                   // a different record from its count cell, so
+                                   // both can be on one row at once (a unit in
+                                   // production and the same unit fielded)
     int              LastSeen;      // frame stamp, drives LRU eviction
 
     bool             Present;       // in the current frame's list
@@ -2779,19 +2850,22 @@ struct IconAnim
     DWORD            MoveSince;
 };
 
-// Live + ghost records together; one player's line budget (at most
-// kHardMaxCells) is the cap the
-// list itself enforces, so twice the HARD cap is a generous ceiling. The table
-// is sized for the compile-time maximum, not the ini value, so raising the ini
-// value can never overrun it.
+// Live + ghost records together. The bound: one row holds at most kHardMaxCells
+// live icons, and no two of them share a key - the counted groups are per-type
+// tallies, the production cells are per-line, and the one legitimate overlap
+// (a type fielded AND in production) splits into two keys on Production. So
+// live records are bounded by the rows' cell counts and ghosts add one
+// generation: twice the HARD cap is a generous ceiling. The table is sized for
+// the compile-time maximum, not the ini value, so raising the ini value can
+// never overrun it.
 static constexpr int ANIM_MAX = kHardMaxRows * kHardMaxCells * 2;
 static IconAnim g_Anim[ANIM_MAX];
 static int g_AnimFrame = 0;
 
-// The record for (house, type), created on first sight. Eviction picks the
-// least recently seen record - in practice never fires, a match holds far
-// fewer distinct (house, type) pairs than the table has slots.
-static IconAnim* AnimFor(HouseClass* pHouse, TechnoTypeClass* pType)
+// The record for (house, type, production), created on first sight. Eviction
+// picks the least recently seen record - in practice never fires, a match holds
+// far fewer distinct keys than the table has slots.
+static IconAnim* AnimFor(HouseClass* pHouse, TechnoTypeClass* pType, bool production)
 {
     IconAnim* pFree = nullptr;
     IconAnim* pStale = nullptr;
@@ -2799,7 +2873,7 @@ static IconAnim* AnimFor(HouseClass* pHouse, TechnoTypeClass* pType)
 
     for (auto& r : g_Anim)
     {
-        if (r.Used && r.House == pHouse && r.Type == pType)
+        if (r.Used && r.House == pHouse && r.Type == pType && r.Production == production)
             return &r;
         if (!r.Used && !pFree)
             pFree = &r;
@@ -2812,9 +2886,10 @@ static IconAnim* AnimFor(HouseClass* pHouse, TechnoTypeClass* pType)
 
     IconAnim* pSlot = pFree ? pFree : pStale;
     *pSlot = IconAnim {};
-    pSlot->Used  = true;
-    pSlot->House = pHouse;
-    pSlot->Type  = pType;
+    pSlot->Used       = true;
+    pSlot->House      = pHouse;
+    pSlot->Type       = pType;
+    pSlot->Production = production;
     return pSlot;
 }
 
@@ -2841,7 +2916,7 @@ static void AnimUpdate(PlayerRow* rows, int rowCount, DWORD now)
             const int line = k / ICONS_PER_LINE;
             const int col  = k % ICONS_PER_LINE;
 
-            IconAnim& r = *AnimFor(rows[i].House, icon.Type);
+            IconAnim& r = *AnimFor(rows[i].House, icon.Type, icon.Building);
             r.LastSeen = g_AnimFrame;
 
             if (!r.Present)
@@ -3233,9 +3308,11 @@ static void DrawPanel()
         {
             DrawClock(pSurface, cellX + CAMEO_X, cellY + CAMEO_Y, g.Ghost);
             DrawProgress(pSurface, cellX + CAMEO_X, cellY + CAMEO_Y, g.Ghost);
+            if (g.Ghost.Count > 0)
+                DrawBadge(pSurface, cellX + CAMEO_X, cellY + CAMEO_Y, g.Ghost.Count, true);
         }
         else if (Cfg().ShowCountChip)
-            DrawCount(pSurface, cellX + CAMEO_X, cellY + CAMEO_Y, g.Ghost.Count);
+            DrawBadge(pSurface, cellX + CAMEO_X, cellY + CAMEO_Y, g.Ghost.Count, false);
 
         WashCameo(pSurface, cellX + CAMEO_X, cellY + CAMEO_Y, alpha, recess);
     }
@@ -3309,7 +3386,7 @@ static void DrawPanel()
         for (int k = 0; k < r.IconCount; ++k)
         {
             const RowIcon& icon = r.Icons[k];
-            const IconAnim& rec = *AnimFor(pHouse, icon.Type);
+            const IconAnim& rec = *AnimFor(pHouse, icon.Type, icon.Building);
 
             // Animated slot position in PIXELS (not rounded to cells - see the
             // ghost-pass note above: cell-rounded drawing quantises the glide
@@ -3345,14 +3422,17 @@ static void DrawPanel()
 
                 if (icon.Building)
                 {
-                    // Structure under construction: the engine's own gclock2
-                    // sweep over the cameo is the progress display. A finished
-                    // item gets no clock - DrawClock skips it.
+                    // Item under construction: the engine's own gclock2 sweep
+                    // over the cameo is the progress display. A finished item
+                    // gets no clock - DrawClock skips it. The queue badge
+                    // carries how many more of this type are coming.
                     DrawClock(pSurface, cx, cy, icon);
                     DrawProgress(pSurface, cx, cy, icon);
+                    if (icon.Count > 0)
+                        DrawBadge(pSurface, cx, cy, icon.Count, true);
                 }
                 else if (Cfg().ShowCountChip)
-                    DrawCount(pSurface, cx, cy, icon.Count);
+                    DrawBadge(pSurface, cx, cy, icon.Count, false);
 
                 WashCameo(pSurface, cx, cy, alpha, recess);
             }

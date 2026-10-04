@@ -40,6 +40,19 @@ static const char* GroupName(int group)
     }
 }
 
+static const char* ProdCellName(int cell)
+{
+    switch (cell)
+    {
+    case kProdCellBuilding: return "building";
+    case kProdCellOrdnance: return "ordnance";
+    case kProdCellVehicle:  return "vehicle";
+    case kProdCellAircraft: return "aircraft";
+    case kProdCellInfantry: return "infantry";
+    default:                return "?";
+    }
+}
+
 static const char* LinesModeName(int mode)
 {
     switch (mode)
@@ -207,15 +220,20 @@ int main()
            "the board's occupied width)\n", c.ScrollButtonOffsetX);
 
     printf("\n-- content --\n");
-    printf("WatchBar.ShowStructures=%d  WatchBar.ShowUnits=%d  WatchBar.ShowCountChip=%d  "
+    printf("WatchBar.ShowStructures=%d  WatchBar.ShowUnitProduction=%d  "
+           "WatchBar.ShowUnits=%d  WatchBar.ShowCountChip=%d  "
            "WatchBar.SortMode=%s\n",
-           c.ShowStructures, c.ShowUnits, c.ShowCountChip, SortName(c.SortMode));
+           c.ShowStructures, c.ShowUnitProduction, c.ShowUnits, c.ShowCountChip,
+           SortName(c.SortMode));
     printf("count: WatchBar.CountBuilding=%d  CountInfantry=%d  CountVehicle=%d  "
            "CountAircraft=%d\n",
            c.CountBuilding, c.CountInfantry, c.CountVehicle, c.CountAircraft);
     printf("WatchBar.GroupOrder:");
     for (int i = 0; i < kGroupCount; ++i)
         printf("%s%s", i ? " > " : " ", GroupName(c.GroupOrder[i]));
+    printf("\nWatchBar.ProductionOrder:");
+    for (int i = 0; i < kHardMaxProdCells; ++i)
+        printf("%s%s", i ? " > " : " ", ProdCellName(c.ProductionOrder[i]));
     printf("\nWatchBar.MaxIconsPerGroup:");
     for (int i = 0; i < kGroupCount; ++i)
     {

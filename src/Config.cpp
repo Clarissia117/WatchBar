@@ -44,6 +44,14 @@ static const int kDefaultGroupOrder[kGroupCount] =
     kGroupProduction, kGroupBuilding, kGroupVehicle, kGroupAircraft, kGroupInfantry
 };
 
+// [WatchBar] ProductionOrder default: the production block reads in the same
+// category order as the counted blocks, so the whole row scans in one order.
+static const int kDefaultProductionOrder[kHardMaxProdCells] =
+{
+    kProdCellBuilding, kProdCellOrdnance, kProdCellVehicle,
+    kProdCellAircraft, kProdCellInfantry
+};
+
 static const char* GroupName(int group)
 {
     switch (group)
@@ -54,6 +62,20 @@ static const char* GroupName(int group)
     case kGroupVehicle:    return "vehicle";
     case kGroupAircraft:   return "aircraft";
     default:               return "?";
+    }
+}
+
+// The spelling the log uses for a production cell.
+static const char* ProdCellName(int cell)
+{
+    switch (cell)
+    {
+    case kProdCellBuilding: return "building";
+    case kProdCellOrdnance: return "ordnance";
+    case kProdCellVehicle:  return "vehicle";
+    case kProdCellAircraft: return "aircraft";
+    case kProdCellInfantry: return "infantry";
+    default:                return "?";
     }
 }
 
@@ -301,7 +323,7 @@ static void SetDefaults(WatchBarConfig& c)
     // colours
     c.DoneColor              = WatchBarColor { 120, 255, 140 };
     c.ProgressTextColor      = WatchBarColor { 255, 255, 255 };
-    c.QueueTextColor         = WatchBarColor { 205, 205, 205 };
+    c.QueueTextColor         = WatchBarColor { 255, 255, 255 };
     c.CountChipColor         = WatchBarColor { 36, 36, 36 };
     c.CountTextColor         = WatchBarColor { 255, 255, 255 };
     c.IdleTextColor          = WatchBarColor { 130, 130, 130 };
@@ -332,14 +354,16 @@ static void SetDefaults(WatchBarConfig& c)
     c.ScanIntervalMs      = 0;
 
     // content
-    c.ShowStructures   = 1;
-    c.ShowUnits        = 1;
-    c.CountBuilding    = 0;   // off: the board is production + fielded units
-    c.CountInfantry    = 1;
-    c.CountVehicle     = 1;
-    c.CountAircraft    = 1;
-    c.ShowCountChip    = 1;
-    c.SortMode         = kSortTech;
+    c.ShowStructures      = 1;
+    c.ShowUnitProduction  = 0;   // off: the block ships with the structure
+                                 // cells; unit lines are opt-in
+    c.ShowUnits           = 1;
+    c.CountBuilding       = 0;   // off: the board is production + fielded units
+    c.CountInfantry       = 1;
+    c.CountVehicle        = 1;
+    c.CountAircraft       = 1;
+    c.ShowCountChip      = 1;
+    c.SortMode           = kSortTech;
     for (int i = 0; i < kGroupCount; ++i)
     {
         c.GroupOrder[i] = kDefaultGroupOrder[i];
@@ -348,6 +372,8 @@ static void SetDefaults(WatchBarConfig& c)
         c.MaxIconsPerGroup[i] = kHardMaxCells;
     }
     c.MaxIconsPerGroup[kGroupBuilding] = kDefaultMaxIconsBuilding;
+    for (int i = 0; i < kHardMaxProdCells; ++i)
+        c.ProductionOrder[i] = kDefaultProductionOrder[i];
 
     // gate
     c.SpectatorOnly    = 1;
@@ -586,6 +612,20 @@ static int GroupFromName(const char* s)
     return -1;
 }
 
+// One token of ProductionOrder -> WatchBarProdCell, or -1. "ordnance" is the
+// defence tab (the term the rest of this file uses); the common spellings of
+// "defence" are accepted too.
+static int ProdCellFromName(const char* s)
+{
+    if (EqNoCase(s, "building") || EqNoCase(s, "buildings")) return kProdCellBuilding;
+    if (EqNoCase(s, "ordnance") || EqNoCase(s, "defence") || EqNoCase(s, "defense"))
+        return kProdCellOrdnance;
+    if (EqNoCase(s, "vehicle")  || EqNoCase(s, "vehicles"))  return kProdCellVehicle;
+    if (EqNoCase(s, "aircraft")) return kProdCellAircraft;
+    if (EqNoCase(s, "infantry")) return kProdCellInfantry;
+    return -1;
+}
+
 struct Ctx
 {
     WatchBarConfig& c;
@@ -681,6 +721,91 @@ static void WideKey(Ctx& x, wchar_t* dst, int cap)
 }
 
 // ------------------------------------------------------------------- parsing
+
+// Shared by GroupOrder and ProductionOrder: parse a comma-separated
+// permutation of `count` names into out[]. IndexFromName maps one token to its
+// index, or -1; `noun` / `nounPlural` / `nameList` only shape the notes. The
+// list must name every entry exactly once - a partial list would leave the
+// position of the unlisted entries undefined, and the point of these keys is
+// that the row reads exactly as the author wrote it. Returns true and fills
+// out[] only when the value is a clean permutation; on anything else the
+// caller keeps its default and the note says so.
+static bool ParsePermutation(Ctx& x, int* out, int count,
+                             int (*IndexFromName)(const char*),
+                             const char* noun, const char* nameList,
+                             const char* nounPlural)
+{
+    int  parsed[8];   // both permutations (kGroupCount, kHardMaxProdCells) are 5
+    int  n = 0;
+    bool ok = true;
+    const char* p = x.val;
+
+    while (ok && *p)
+    {
+        while (*p == ' ' || *p == '\t' || *p == ',')
+            ++p;
+        if (!*p)
+            break;
+
+        const char* start = p;
+        while (*p && *p != ',')
+            ++p;
+
+        char token[24];
+        size_t len = static_cast<size_t>(p - start);
+        if (len >= sizeof(token))
+            len = sizeof(token) - 1;
+        memcpy(token, start, len);
+        token[len] = '\0';
+        Trim(token);
+
+        const int id = token[0] ? IndexFromName(token) : -1;
+        if (id < 0)
+        {
+            ConfigNote(x.c, kCfgKeyPrefix "%s: \"%s\" is not a %s (%s) - "
+                          "keeping the default order", x.key, token, noun, nameList);
+            ok = false;
+            break;
+        }
+
+        for (int i = 0; i < n; ++i)
+        {
+            if (parsed[i] == id)
+            {
+                ConfigNote(x.c, kCfgKeyPrefix "%s: \"%s\" listed twice - "
+                              "keeping the default order", x.key, token);
+                ok = false;
+                break;
+            }
+        }
+        if (!ok)
+            break;
+
+        if (n >= count)
+        {
+            ConfigNote(x.c, kCfgKeyPrefix "%s has more than %d entries - "
+                          "keeping the default order", x.key, count);
+            ok = false;
+            break;
+        }
+
+        parsed[n++] = id;
+    }
+
+    if (ok && n != count)
+    {
+        ConfigNote(x.c, kCfgKeyPrefix "%s names %d of the %d %s - keeping the "
+                      "default order", x.key, n, count, nounPlural);
+        ok = false;
+    }
+
+    if (ok)
+    {
+        for (int i = 0; i < count; ++i)
+            out[i] = parsed[i];
+    }
+    return ok;
+}
 
 // Keys that no longer exist. They are reported with the reason instead of the
 // generic "unrecognised key" line, which would suggest a spelling mistake.
@@ -898,7 +1023,8 @@ static void ApplyKey(Ctx& x)
                           "loose / ultra - keeping fixed", x.val);
     }
 
-    else if (EqNoCase(k, "ShowStructures")) BoolKey(x, c.ShowStructures);
+    else if (EqNoCase(k, "ShowStructures"))      BoolKey(x, c.ShowStructures);
+    else if (EqNoCase(k, "ShowUnitProduction"))  BoolKey(x, c.ShowUnitProduction);
     else if (EqNoCase(k, "ShowUnits"))      BoolKey(x, c.ShowUnits);
     else if (EqNoCase(k, "CountBuilding"))  BoolKey(x, c.CountBuilding);
     else if (EqNoCase(k, "CountInfantry"))  BoolKey(x, c.CountInfantry);
@@ -979,76 +1105,20 @@ static void ApplyKey(Ctx& x)
         // of the unlisted groups undefined, and the purpose of this key is that
         // the row reads exactly as the author wrote it. Anything wrong keeps the
         // default order and says so.
-        int  parsed[kGroupCount];
-        int  n = 0;
-        bool ok = true;
-        const char* p = x.val;
+        ParsePermutation(x, c.GroupOrder, kGroupCount, GroupFromName,
+                         "group", "production/building/infantry/vehicle/aircraft",
+                         "groups");
+    }
+    else if (EqNoCase(k, "ProductionOrder"))
+    {
+        x.handled = true;
 
-        while (ok && *p)
-        {
-            while (*p == ' ' || *p == '\t' || *p == ',')
-                ++p;
-            if (!*p)
-                break;
-
-            const char* start = p;
-            while (*p && *p != ',')
-                ++p;
-
-            char token[24];
-            size_t len = static_cast<size_t>(p - start);
-            if (len >= sizeof(token))
-                len = sizeof(token) - 1;
-            memcpy(token, start, len);
-            token[len] = '\0';
-            Trim(token);
-
-            const int group = token[0] ? GroupFromName(token) : -1;
-            if (group < 0)
-            {
-                ConfigNote(c, kCfgKeyPrefix "GroupOrder: \"%s\" is not a group "
-                              "(production/building/infantry/vehicle/aircraft)"
-                              " - keeping the default order", token);
-                ok = false;
-                break;
-            }
-
-            for (int i = 0; i < n; ++i)
-            {
-                if (parsed[i] == group)
-                {
-                    ConfigNote(c, kCfgKeyPrefix "GroupOrder: \"%s\" listed twice "
-                                  "- keeping the default order", token);
-                    ok = false;
-                    break;
-                }
-            }
-            if (!ok)
-                break;
-
-            if (n >= kGroupCount)
-            {
-                ConfigNote(c, kCfgKeyPrefix "GroupOrder has more than %d entries "
-                              "- keeping the default order", kGroupCount);
-                ok = false;
-                break;
-            }
-
-            parsed[n++] = group;
-        }
-
-        if (ok && n != kGroupCount)
-        {
-            ConfigNote(c, kCfgKeyPrefix "GroupOrder names %d of the %d groups "
-                          "- keeping the default order", n, kGroupCount);
-            ok = false;
-        }
-
-        if (ok)
-        {
-            for (int i = 0; i < kGroupCount; ++i)
-                c.GroupOrder[i] = parsed[i];
-        }
+        // Same contract, for the production block's cells. The last cell listed
+        // is the first the production cap cuts.
+        ParsePermutation(x, c.ProductionOrder, kHardMaxProdCells, ProdCellFromName,
+                         "production cell",
+                         "building/ordnance/vehicle/aircraft/infantry",
+                         "production cells");
     }
     else if (EqNoCase(k, "SortMode"))
     {
@@ -1133,9 +1203,9 @@ static const char* const kKnownKeys[] =
     "ScrollRepeatDelayMs", "ScrollRepeatRateMs", "ScanIntervalMs",
 
     // content
-    "ShowStructures", "ShowUnits", "CountBuilding", "CountInfantry",
-    "CountVehicle", "CountAircraft", "MaxIconsPerGroup", "GroupOrder",
-    "ShowCountChip", "SortMode",
+    "ShowStructures", "ShowUnitProduction", "ShowUnits", "CountBuilding",
+    "CountInfantry", "CountVehicle", "CountAircraft", "MaxIconsPerGroup",
+    "GroupOrder", "ProductionOrder", "ShowCountChip", "SortMode",
 
     // gate
     "SpectatorOnly", "ParticipantRows", "ShowWhenDefeated",
@@ -1298,6 +1368,43 @@ static void Validate(WatchBarConfig& c)
         ConfigNote(c, kCfgKeyPrefix "MaxIconsPerGroup building:%d has no effect "
                       "while " kCfgKeyPrefix "CountBuilding=0 (the building group "
                       "is off)", c.MaxIconsPerGroup[kGroupBuilding]);
+    }
+
+    if (!c.ShowStructures && !c.ShowUnitProduction
+        && c.MaxIconsPerGroup[kGroupProduction] != kHardMaxCells)
+    {
+        ConfigNote(c, kCfgKeyPrefix "MaxIconsPerGroup production:%d has no effect "
+                      "while both " kCfgKeyPrefix "ShowStructures=0 and "
+                      kCfgKeyPrefix "ShowUnitProduction=0 (the production group "
+                      "is off)", c.MaxIconsPerGroup[kGroupProduction]);
+    }
+
+    // A customised production order is echoed like GroupOrder: the block reads
+    // as written, and the last cell listed is the first the production cap cuts.
+    bool defaultProdOrder = true;
+    for (int i = 0; i < kHardMaxProdCells && defaultProdOrder; ++i)
+        defaultProdOrder = c.ProductionOrder[i] == kDefaultProductionOrder[i];
+
+    if (!defaultProdOrder)
+    {
+        if (!c.ShowStructures && !c.ShowUnitProduction)
+        {
+            ConfigNote(c, kCfgKeyPrefix "ProductionOrder has no effect while both "
+                          kCfgKeyPrefix "ShowStructures=0 and " kCfgKeyPrefix
+                          "ShowUnitProduction=0 (the production group is off)");
+        }
+        else
+        {
+            char line[96] = "";
+            for (int i = 0; i < kHardMaxProdCells; ++i)
+            {
+                if (i)
+                    lstrcatA(line, ",");
+                lstrcatA(line, ProdCellName(c.ProductionOrder[i]));
+            }
+            ConfigNote(c, kCfgKeyPrefix "ProductionOrder = %s (the last cell is "
+                          "cut first)", line);
+        }
     }
 
     // A customised icon order is echoed once per load: the row's layout is the
