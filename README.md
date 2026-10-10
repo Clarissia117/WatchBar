@@ -135,18 +135,15 @@ tools/check_ini.bat    离线参数校验
 `FactoryClass` / 单位数组，不使用 `ReadProcessMemory`，不需要管理员权限；素材也只从
 `WatchBar.*PCX` 这几个键读取，不读取任何其他 mod 的侧边栏配置。
 
-## 已知限制
+## 特性/限制
 
+- **战役中不可用**：面板在战役里始终不显示。
 - **点击穿透**：面板绘制在战场上，落在面板上的鼠标事件会传递给下方地图。
 - **鼠标滚轮不可用**：引擎限制，不支持滚轮。
 - **参数不热重载**：所有 INI 配置由引擎在启动时读取一次，修改后需重开游戏。
 
 ## 致谢
 
-机制参考 [Phobos](https://github.com/Phobos-developers/Phobos) 的超武侧边栏
-（`GadgetClass` + `GScreenClass::AddButton`）与游戏内调试面板（`ObjectInfo.cpp`，
-同一绘制钩子点）；结构定义来自
-[YRpp](https://github.com/Phobos-developers/YRpp)；注入框架为
-[Syringe](https://github.com/Phobos-developers/SyringeEx)。
+机制参考 [Phobos](https://github.com/Phobos-developers/Phobos) 的超武侧边栏（`GadgetClass` + `GScreenClass::AddButton`）与游戏内调试面板（`ObjectInfo.cpp`，同一绘制钩子点）；结构定义来自[YRpp](https://github.com/Phobos-developers/YRpp)；注入框架为[Syringe](https://github.com/Phobos-developers/SyringeEx)。
 
 PCX 素材不在本仓库内，由各 mod 自行提供。

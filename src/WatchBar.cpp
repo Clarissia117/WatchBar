@@ -44,6 +44,9 @@
 // participants and outside matches. WatchBar.SpectatorOnly=0 puts it in front
 // of participants too (authoring), and WatchBar.ParticipantRows then decides
 // whose rows they get: their own by default, allies or everyone if asked.
+// Two rules sit in front of that key: a campaign mission never gets a board
+// (single-player, no spectators), and neither does a session with no combatant
+// house in it - an empty board is never worth its toggle strip.
 // Each counted group sorts by TechLevel, high first, and the blocks keep the
 // configured order. This replaced the old fixed four-slot production board:
 // what a player is producing is only half the picture, the fielded army is the
@@ -557,12 +560,27 @@ static void ResolveRowName(PlayerRow& r, HouseClass* pHouse)
 //     IsCombatant already excludes them from their own list)
 //   - participant: WatchBar.ParticipantRows - their own house(s) by default,
 //     allies or the whole match only when the author asked for it
+//   - campaign: nobody - the board is off for the local player whatever
+//     WatchBar.SpectatorOnly says (see IsSpectating and BoardVisibleToMe)
 //
 // This answers "am I a spectator". BoardVisibleToMe below answers "is the board
 // on screen for me", which is a different question now that
 // WatchBar.SpectatorOnly=0 can put the board in front of a participant.
+//
+// Campaign is the one audience that is excluded by rule rather than by state:
+// a mission is single-player, so it has no spectators, and the local player is
+// its commander. The engine's own setup makes the spawn-slot fallback below
+// misfire there - scenario init fills ScenarioClass::HouseIndices[0..15] with
+// -1 (0x6873AB..0x6873C6) and then SKIPS the assignment of houses to spawn
+// slots when SessionClass::GameMode is Campaign (0x6873CE jumps past the call
+// at 0x6873DB), so GetSpawnPosition() is -1 for every house in a mission,
+// the local player's included. Without this test the fallback reads that
+// commander as a spectator.
 static bool IsSpectating()
 {
+    if (SessionClass::IsCampaign())
+        return false;
+
     // Prefer the game's own notion of "the current player is an observer".
     if (HouseClass::IsCurrentPlayerObserver())
         return true;
@@ -599,8 +617,28 @@ static bool IsSpectating()
 // Every gate that decides whether the panel and its gadgets exist asks THIS,
 // never IsSpectating(): a participant with the board up is not a spectator, and
 // the row filter below must not treat them as one.
+//
+// A campaign mission is excluded here as well as in IsSpectating, and ahead of
+// the SpectatorOnly test, so the answer does not depend on that key: a mission
+// has nobody to watch, and its own commander must not get a board - under
+// SpectatorOnly=1 the spawn-slot fallback would hand them one (see
+// IsSpectating), and under SpectatorOnly=0 the board would come up with no rows
+// on it, because no house in a mission holds a spawn slot for IsCombatant to
+// accept. That second half is the "nothing to watch" test below, which holds
+// for any session with no combatant house in it, however it was launched.
+static int CombatantCount();   // defined with the combatant test below
+
 static bool BoardVisibleToMe()
 {
+    if (SessionClass::IsCampaign())
+        return false;
+
+    // No combatant, no rows: the board would be an empty frame with a working
+    // toggle strip over the playfield. Nothing to watch is never worth a board,
+    // so it stays off whatever WatchBar.SpectatorOnly says.
+    if (CombatantCount() == 0)
+        return false;
+
     return !Cfg().SpectatorOnly || IsSpectating();
 }
 
@@ -621,6 +659,31 @@ static bool IsCombatant(HouseClass* pHouse)
     // Occupying a spawn slot separates "playing" from "watching".
     // GetSpawnPosition() returns -1 for houses not placed on the map.
     return pHouse->GetSpawnPosition() >= 0;
+}
+
+// Is there a match at all - at least one combatant house? Every row on the
+// board is a combatant, so no combatant means no rows: a board drawn then is an
+// empty frame with a working toggle strip on top of the playfield.
+//
+// A campaign mission is exactly that state, by the engine's own construction
+// (see IsSpectating: no spawn slots exist in a mission), which is why this is
+// the second half of the campaign rule in BoardVisibleToMe. It is checked
+// separately from SessionClass::IsCampaign() because the two answer different
+// questions: GameMode says which mode the session was started in, this says
+// whether there is anything to watch - and a launch path that reaches a mission
+// without leaving GameMode on Campaign still has nothing to show.
+//
+// The count (not just a bool) is what the gate log reports, so an empty board
+// can be told apart from a board whose rows were all filtered out.
+static int CombatantCount()
+{
+    int n = 0;
+    for (auto pHouse : HouseClass::Array)
+    {
+        if (IsCombatant(pHouse))
+            ++n;
+    }
+    return n;
 }
 
 static bool IsVisibleToMe(HouseClass* pHouse)
@@ -3468,9 +3531,10 @@ static void DrawPanel()
 // press-then-release trigger the super-weapon sidebar uses.
 //
 // The whole control follows the board's gate: when the board is not up for me
-// (a participant under the shipped WatchBar.SpectatorOnly=1, or no match),
-// neither the board nor this strip exists on screen, and the strip's hit-box is
-// parked off the playfield so it cannot swallow map clicks (see UpdatePosition).
+// (a participant under the shipped WatchBar.SpectatorOnly=1, a campaign
+// mission, or no match), neither the board nor this strip exists on screen, and
+// the strip's hit-box is parked off the playfield so it cannot swallow map
+// clicks (see UpdatePosition).
 //
 // The art is the *current player's* side, so the strip matches their sidebar.
 // The strip's X glides to a changed target with the same 90 ms ease-out the
@@ -4132,11 +4196,11 @@ DEFINE_HOOK(0x4F4583, GScreenClass_DrawOnTop_WatchBar, 0x6)
     EnsureScrollButtons();
 
     // Log the gate only when it FLIPS, so the log shows exactly when and why
-    // the panel appeared or vanished (observer flag / Defeated flag / spawn
-    // slot) without any per-frame noise. `board` is the answer the drawing and
-    // the gadgets use, `spectating` the answer the row filter uses - with
-    // SpectatorOnly=0 the two differ for a participant, and that difference is
-    // exactly what WatchBar.ParticipantRows decides.
+    // the panel appeared or vanished (campaign / observer flag / Defeated flag
+    // / spawn slot / no combatants) without any per-frame noise. `board` is the
+    // answer the drawing and the gadgets use, `spectating` the answer the row
+    // filter uses - with SpectatorOnly=0 the two differ for a participant, and
+    // that difference is exactly what WatchBar.ParticipantRows decides.
     const bool spectating = IsSpectating();
     static bool s_WasSpectating = false;
     static bool s_GateSeen = false;
@@ -4146,23 +4210,25 @@ DEFINE_HOOK(0x4F4583, GScreenClass_DrawOnTop_WatchBar, 0x6)
         s_WasSpectating = spectating;
         const auto pMe = HouseClass::CurrentPlayer;
         LogLine("gate: board=%d spectating=%d participantRows=%s "
-                "(observer=%d defeated=%d spawn=%d)",
+                "(campaign=%d observer=%d defeated=%d spawn=%d combatants=%d)",
                 BoardVisibleToMe() ? 1 : 0,
                 spectating ? 1 : 0,
                 ParticipantRowsName(Cfg().ParticipantRows),
+                SessionClass::IsCampaign() ? 1 : 0,
                 HouseClass::IsCurrentPlayerObserver() ? 1 : 0,
                 (pMe && pMe->Defeated) ? 1 : 0,
-                pMe ? pMe->GetSpawnPosition() : -2);
+                pMe ? pMe->GetSpawnPosition() : -2,
+                CombatantCount());
     }
 
     // Gated: the board and its toggle exist only for an audience - a spectator,
-    // or a participant when WatchBar.SpectatorOnly=0 asked for the board. Under
-    // the shipped default a participant sees neither, must not see it (their own
-    // production already lives on the game's real sidebar) and must not have an
-    // invisible clickable control on their playfield. BoardVisibleToMe() is the
-    // gate, and the row filter inside uses IsSpectating() plus
-    // WatchBar.ParticipantRows, so the two can disagree about WHO is listed but
-    // never about whether the board exists.
+    // or a participant when WatchBar.SpectatorOnly=0 asked for the board, and
+    // never in a campaign mission. Under the shipped default a participant sees
+    // neither, must not see it (their own production already lives on the
+    // game's real sidebar) and must not have an invisible clickable control on
+    // their playfield. BoardVisibleToMe() is the gate, and the row filter inside
+    // uses IsSpectating() plus WatchBar.ParticipantRows, so the two can disagree
+    // about WHO is listed but never about whether the board exists.
     // UpdatePosition parks the gadgets off-screen for the non-spectator case;
     // Draw() additionally paints nothing.
     g_pToggle->UpdatePosition();

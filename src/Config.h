@@ -43,7 +43,7 @@
 #include <windows.h>
 
 // ---------------------------------------------------------------- version
-#define WATCHBAR_VERSION "1.4.0"
+#define WATCHBAR_VERSION "1.4.1"
 
 // The host this build hooks: YR 1.001 gamemd.exe. The two hook sites are
 // absolute addresses in that build, so a different exe is a warning, not a
@@ -138,6 +138,10 @@ enum WatchBarLinesMode
 // different question. It is drawn over their own playfield, and every row is
 // live information about a house they would otherwise have to scout for, so the
 // audience is a decision rather than a given.
+//
+// A campaign mission is neither audience: the board is off there whatever
+// SpectatorOnly says, so this key is never read in a mission (see
+// BoardVisibleToMe in WatchBar.cpp).
 //
 //   own    - the local player's own house(s), nothing else. The default, since
 //            it shows a participant nothing they could not already see.
@@ -359,6 +363,9 @@ struct WatchBarConfig
 
     // ---- gate -------------------------------------------------------------
     // WatchBar.SpectatorOnly / WatchBar.ParticipantRows / WatchBar.ShowWhenDefeated
+    // All three are match settings: a campaign mission is not a match, and a
+    // session with no combatant house in it has nothing to show, so the board
+    // is off in both cases whatever these say.
     int SpectatorOnly;       // 1 = the board exists only for spectators
     int ParticipantRows;     // WatchBarParticipantRows: who a PARTICIPANT sees
                              // (only read when SpectatorOnly is 0)

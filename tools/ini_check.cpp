@@ -253,8 +253,8 @@ int main()
            c.SpectatorOnly
                ? "   <- participants see no board, so this is not read"
                : "   <- participants see the board: this is who they see");
-    printf("  (a spectator always sees every combatant; ParticipantRows only ever\n"
-           "   narrows what a player who is actually fighting gets to see)\n");
+    printf("  (a spectator sees every combatant; ParticipantRows narrows what a\n"
+           "   participant sees. Campaign and no-combatant sessions: no board)\n");
 
     printf("\n-- log --\n");
     printf("WatchBar.LogEnabled=%d  WatchBar.LogLevel=%d  WatchBar.LogMaxKB=%d\n"
