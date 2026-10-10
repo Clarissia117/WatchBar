@@ -126,7 +126,7 @@ tools/check_ini.bat    离线参数校验
 
 | 环境 | 状态 |
 |---|---|
-| EC（Ares + Phobos，CnCNet 客户端） | 已实机验证 |
+| Mod 地球危机 (Earth Crisis) Ares + Phobos，CnCNet 客户端 | 已实机验证 |
 | 原生 YR 1.001 + Ares | 未测试（cameo 走 SHP 路径） |
 | 原生 YR 1.001，无 Ares | 未测试（使用 `Cameo=`，`CameoPCX=` 不生效） |
 | 修改或加壳过 `gamemd.exe` 的 mod | 不支持：钩子点是 YR 1.001 的绝对地址，启动时会比对 exe 时间戳并写 WARNING |
