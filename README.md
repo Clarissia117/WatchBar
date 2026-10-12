@@ -117,6 +117,8 @@ deploy.bat --apply    :: 写入
 src/WatchBar.cpp       面板实现（绘制、收集、门控、gadget、钩子）
 src/Config.h           参数结构、硬上限、契约说明
 src/Config.cpp         uimd.ini [WatchBar] 解析与校验
+src/WatchBar.rc        VERSIONINFO 与清单
+src/WatchBar.manifest  asInvoker 模块声明
 docs/config.md         参数参考
 docs/uimd-sample.ini   可整段追加到 uimd.ini 的参数块
 tools/check_ini.bat    离线参数校验

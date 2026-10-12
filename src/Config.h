@@ -43,7 +43,7 @@
 #include <windows.h>
 
 // ---------------------------------------------------------------- version
-#define WATCHBAR_VERSION "1.4.1"
+#define WATCHBAR_VERSION "1.4.2"
 
 // The host this build hooks: YR 1.001 gamemd.exe. The two hook sites are
 // absolute addresses in that build, so a different exe is a warning, not a

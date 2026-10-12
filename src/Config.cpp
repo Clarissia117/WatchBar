@@ -258,10 +258,22 @@ const char* ConfigIniPath()
 // The host executable's PE timestamp. This is how the panel tells "the mod
 // ships a patched gamemd.exe" (hook addresses may mean something else there)
 // apart from "the panel is broken": a mismatch is logged, never fatal.
+//
+// Only the game itself is inspected: under any other host the value has no
+// meaning, so the host image is never opened and the result is 0.
 static DWORD ReadExeTimestamp()
 {
     char path[MAX_PATH];
     if (!GetModuleFileNameA(nullptr, path, MAX_PATH))
+        return 0;
+
+    const char* name = path;
+    for (const char* p = path; *p; ++p)
+    {
+        if (*p == '\\' || *p == '/')
+            name = p + 1;
+    }
+    if (lstrcmpiA(name, "gamemd.exe") != 0)
         return 0;
 
     HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
