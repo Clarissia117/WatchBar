@@ -4133,7 +4133,9 @@ static void EnsureScrollButtons()
 //
 // plus the "Game loop finished. Average FPS" line the client also reads. One
 // entry per house the engine includes; the score-screen snapshot also carries
-// AI houses, which the old debug.log block omitted.
+// AI houses, which the old debug.log block omitted. AI entries carry the name
+// the client matches its AI rows by ("Computer"), not the game's localised
+// house name; see StatisticsLogWrite.
 
 // --- the engine's result array ---------------------------------------------
 //
@@ -4299,6 +4301,32 @@ static void StatisticsLogWrite()
     }
 
     const MPScoreEntry* pScores = MPScores();
+
+    // The client creates its AI slots under the literal name "Computer" - that
+    // is what it passes to MatchStatistics before parsing - and only labels
+    // them by difficulty ("简单 AI" etc.) in the results window. The engine, on
+    // the other hand, stores the localised house name ("电脑") for every AI
+    // house, so an AI block written with the engine's name matches no client
+    // row and the client shows zeros for every AI player.
+    //
+    // Walk the houses in the score dialog's own order and filter (the array was
+    // just filled by it) so each entry can be named the way the client knows
+    // it. Humans keep their engine name. If the counts disagree - the
+    // completion fallback fills human houses only - the mapping is not
+    // trustworthy and the raw engine names are kept.
+    HouseClass* pHouseOfEntry[kMaxMPScoreEntries] = {};
+    int houseCount = 0;
+    for (HouseClass* pHouse : HouseClass::Array)
+    {
+        if (!pHouse || (pHouse->Type && pHouse->Type->MultiplayPassive) ||
+            pHouse->IsObserver())
+            continue;
+        if (houseCount < kMaxMPScoreEntries)
+            pHouseOfEntry[houseCount] = pHouse;
+        ++houseCount;
+    }
+    const bool housesMatch = houseCount == count;
+
     int written = 0;
     for (int i = 0; i < count; ++i)
     {
@@ -4306,12 +4334,16 @@ static void StatisticsLogWrite()
         if (!e.Name[0])
             continue;
 
+        const wchar_t* wideName = e.Name;
+        if (housesMatch && pHouseOfEntry[i] && !pHouseOfEntry[i]->IsHumanPlayer)
+            wideName = L"Computer";
+
         // The engine's name is UTF-16; the client reads the file as UTF-8.
         // Names it cannot represent fall back to '?' one character at a time,
         // which is the best a line-oriented text format can do.
         char name[80];
         name[0] = '\0';
-        WideCharToMultiByte(CP_UTF8, 0, e.Name, -1, name, sizeof(name), nullptr, nullptr);
+        WideCharToMultiByte(CP_UTF8, 0, wideName, -1, name, sizeof(name), nullptr, nullptr);
 
         // Same words, same spacing, same field order as the engine's own block
         // (the "Scheme" line is ignored by the client but kept for fidelity).
