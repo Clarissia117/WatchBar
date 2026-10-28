@@ -69,6 +69,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <cstddef>
 #include <algorithm>
 #include <YRPP.h>
 #include <Helpers/Macro.h>
@@ -94,6 +95,7 @@
 #include <GadgetClass.h>
 #include <MouseClass.h>
 #include <CCINIClass.h>
+#include <FPSCounter.h>
 
 #include "Config.h"
 
@@ -4105,6 +4107,233 @@ static void EnsureScrollButtons()
     g_pScrollDown->UpdatePosition();
 }
 
+// ----------------------------------------------------------- statistics log
+// One optional file for the CnCNet client.
+//
+// The client fills its statistics screen from a single log file after every
+// game (ClientDefinitions.ini: StatisticsLogFileName). Pointed at the engine's
+// debug.log, that file holds every debug line of the whole session and is not
+// overwritten between matches, so it grows without bound and the parser has to
+// skip everything that is not a result. WatchBar.StatisticsLog=1 writes a file
+// that holds the result and nothing else, rewritten each match, so an author
+// can turn the engine's debug logging off entirely.
+//
+// The numbers are NOT copied out of a log: they are read from the engine's own
+// result array at SessionClass::Instance + 0x1FC4, which the game fills at
+// completion for its score screen. The file therefore keeps working with debug
+// logging off, and its text is byte-for-byte the block the engine would have
+// written:
+//
+//     Clarissa: Winner
+//      Scheme: 7
+//      Lost = 4
+//      Kills = 251
+//      Built = 28
+//      Score = 407924
+//
+// plus the "Game loop finished. Average FPS" line the client also reads. One
+// entry per house the engine includes; the score-screen snapshot also carries
+// AI houses, which the old debug.log block omitted.
+
+// --- the engine's result array ---------------------------------------------
+//
+// One entry per house that reached the end of the match, in HouseClass::Array
+// order. It is filled by the game-completion routine at 0x46DA70 (the one that
+// prints "Name: Winner ... Score = N" into debug.log) and recomputed by the
+// score-screen dialog at 0x5C98A0. Offsets verified against gamemd.exe: the
+// name is copied with wcscpy into a 20-wchar buffer and each statistic is an
+// int[4] (one slot per game, the engine's MAX_MULTI_GAMES), so an entry is
+// exactly 0x70 bytes. The count follows at +0x2348; the engine also keeps the
+// index of the last house still standing at count + 4, used for the score
+// screen's winner bonus.
+//
+// Kept here rather than added to the YRpp headers: the layout is only used by
+// this file, and a submodule edit would have to travel separately.
+static constexpr int kMaxMPScoreEntries = 8;   // one per player slot
+static constexpr int kMaxMultiGames      = 4;   // score slots per entry
+
+struct MPScoreEntry
+{
+    wchar_t Name[20];              // 0x00
+    int     Scheme;                // 0x28  colour scheme index
+    int     Wins;                  // 0x2C  non-zero when the house survived
+    int     Lost [kMaxMultiGames]; // 0x30
+    int     Kills[kMaxMultiGames]; // 0x40
+    int     Built[kMaxMultiGames]; // 0x50
+    int     Score[kMaxMultiGames]; // 0x60
+};
+static_assert(sizeof(MPScoreEntry) == 0x70, "MPScoreEntry must match the engine layout");
+static_assert(offsetof(MPScoreEntry, Scheme) == 0x28, "MPScoreEntry::Scheme offset");
+static_assert(offsetof(MPScoreEntry, Wins)   == 0x2C, "MPScoreEntry::Wins offset");
+static_assert(offsetof(MPScoreEntry, Lost)   == 0x30, "MPScoreEntry::Lost offset");
+static_assert(offsetof(MPScoreEntry, Kills)  == 0x40, "MPScoreEntry::Kills offset");
+static_assert(offsetof(MPScoreEntry, Built)  == 0x50, "MPScoreEntry::Built offset");
+static_assert(offsetof(MPScoreEntry, Score)  == 0x60, "MPScoreEntry::Score offset");
+
+static MPScoreEntry* MPScores()
+{
+    return reinterpret_cast<MPScoreEntry*>(
+        reinterpret_cast<char*>(&SessionClass::Instance) + 0x1FC4);
+}
+
+static int& MPScoreCount()
+{
+    return *reinterpret_cast<int*>(
+        reinterpret_cast<char*>(&SessionClass::Instance) + 0x2348);
+}
+
+// Create the folders in front of <path>. A configured StatisticsLogPath may
+// point into a subfolder ("logs\stats.log"); the game creates nothing, and a
+// missing folder would otherwise turn the feature off with nothing but a
+// failed fopen. A bare file name needs no work: the game folder exists.
+//
+// The volume part is walked first ("C:" or "\\server\share"), because a
+// CreateDirectory call on it is either invalid (a drive) or unnecessary (a
+// share); the remaining components are created one at a time.
+static bool EnsureParentDirectory(const char* path)
+{
+    char dir[MAX_PATH];
+    lstrcpynA(dir, path, MAX_PATH);
+
+    char* last = nullptr;
+    for (char* p = dir; *p; ++p)
+    {
+        if (*p == '\\' || *p == '/')
+            last = p;
+    }
+    if (!last)
+        return true;   // plain file name: the game folder is the parent
+    *last = '\0';
+    if (!dir[0])
+        return true;   // "\file": the volume root exists
+
+    char* p = dir;
+    if (p[0] && p[1] == ':')
+        p += 2;                       // "C:..."
+    else if (p[0] == '\\' && p[1] == '\\')
+    {
+        p += 2;                       // "\\server\share\..."
+        for (int i = 0; i < 2 && *p; ++i)
+        {
+            while (*p && *p != '\\' && *p != '/')
+                ++p;
+            if (*p)
+                ++p;
+        }
+    }
+    if (!*p)
+        return true;                  // the parent is a volume/share root
+
+    for (; *p; ++p)
+    {
+        if (*p != '\\' && *p != '/')
+            continue;
+        const char saved = *p;
+        *p = '\0';
+        CreateDirectoryA(dir, nullptr);
+        *p = saved;
+    }
+
+    if (CreateDirectoryA(dir, nullptr))
+        return true;
+    if (GetLastError() != ERROR_ALREADY_EXISTS)
+        return false;
+    const DWORD attr = GetFileAttributesA(dir);
+    return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+static bool StatisticsLogEnsureFolder(const WatchBarConfig& c)
+{
+    if (EnsureParentDirectory(c.StatisticsPath))
+        return true;
+    LogLine("WARNING: statistics log folder for %s could not be created",
+            c.StatisticsPath);
+    return false;
+}
+
+static void StatisticsLogTruncate()
+{
+    const WatchBarConfig& c = Cfg();
+    if (!c.StatisticsLog || !c.StatisticsPath[0])
+        return;
+    if (SessionClass::IsCampaign())
+        return;
+
+    // Empty rather than delete: the client looks for the file after the game
+    // process exits, and a missing file and an empty one both mean "no result",
+    // but an empty file cannot be mistaken for a stale one by anything else.
+    if (!StatisticsLogEnsureFolder(c))
+        return;
+    FILE* f = nullptr;
+    if (fopen_s(&f, c.StatisticsPath, "wb") == 0 && f)
+        fclose(f);
+    else
+        LogLine("WARNING: statistics log %s could not be emptied", c.StatisticsPath);
+}
+
+static void StatisticsLogWrite()
+{
+    const WatchBarConfig& c = Cfg();
+    if (!c.StatisticsLog || !c.StatisticsPath[0])
+        return;
+    if (SessionClass::IsCampaign())
+        return;
+
+    int count = MPScoreCount();
+    if (count < 0)
+        count = 0;
+    if (count > kMaxMPScoreEntries)
+        count = kMaxMPScoreEntries;
+
+    // Open even when there is nothing to write: the file is emptied here, so a
+    // stale result can never survive a match that produced no array (a match
+    // left early does not reach this point at all - the scenario-start hook has
+    // already emptied the file for that case).
+    if (!StatisticsLogEnsureFolder(c))
+        return;
+    FILE* f = nullptr;
+    if (fopen_s(&f, c.StatisticsPath, "wb") != 0 || !f)
+    {
+        LogLine("WARNING: statistics log %s could not be written", c.StatisticsPath);
+        return;
+    }
+
+    const MPScoreEntry* pScores = MPScores();
+    int written = 0;
+    for (int i = 0; i < count; ++i)
+    {
+        const MPScoreEntry& e = pScores[i];
+        if (!e.Name[0])
+            continue;
+
+        // The engine's name is UTF-16; the client reads the file as UTF-8.
+        // Names it cannot represent fall back to '?' one character at a time,
+        // which is the best a line-oriented text format can do.
+        char name[80];
+        name[0] = '\0';
+        WideCharToMultiByte(CP_UTF8, 0, e.Name, -1, name, sizeof(name), nullptr, nullptr);
+
+        // Same words, same spacing, same field order as the engine's own block
+        // (the "Scheme" line is ignored by the client but kept for fidelity).
+        // Winner = the house was still standing when the match ended.
+        fprintf(f, "%s: %s\n Scheme: %d\n Lost = %d\n Kills = %d\n Built = %d\n Score = %d\n",
+                name,
+                e.Wins > 0 ? "Winner" : "Loser",
+                e.Scheme,
+                e.Lost[0], e.Kills[0], e.Built[0], e.Score[0]);
+        ++written;
+    }
+
+    // The client reads AverageFPS from this line. The engine prints it when the
+    // frame loop ends; the same integer division of the frame counters is used
+    // here (see FPSCounter).
+    fprintf(f, "Game loop finished. Average FPS = %d\n",
+            static_cast<int>(FPSCounter::GetAverageFrameRate()));
+
+    fclose(f);
+    LogLine("statistics: wrote %s (%d player(s))", c.StatisticsPath, written);
+}
+
 // ------------------------------------------------------------------ hooks
 
 // The panel's settings, read out of the game's own uimd.ini.
@@ -4143,6 +4372,77 @@ static const WatchBarIniSource kEngineUimdSource =
     &EngineUimdKeyName
 };
 
+// Install the engine's uimd.ini as the settings source and read it. Called by
+// every hook that can be the first one to run: the per-frame draw hook below,
+// and the scenario-start hook that empties the statistics file (which can run
+// before the first frame is drawn).
+static void EnsureConfigReady()
+{
+    static bool s_SourceInstalled = false;
+    if (!s_SourceInstalled)
+    {
+        s_SourceInstalled = true;
+        ConfigSetIniSource(&kEngineUimdSource);
+    }
+    ConfigBeginFrame();
+
+    // The log settings come from this very file; a hook that logs before the
+    // draw hook's announcement must not write when the author turned logging
+    // off. Idempotent, and the draw hook applies them again after a reload.
+    ApplyLogSettings();
+}
+
+// Two points can fill the engine's result array (MPScores above). This one sits
+// right after the game-completion routine at 0x46DA70, which is also what
+// prints the human-only "Name: Winner" block into debug.log. It is the cheap
+// fallback: if a build ends a match without opening the summary below, the
+// file is still written here.
+//
+// On the tested EC/CnCNet launch this path never ran - the numbers the client
+// used came from the score-screen init below - but the hook costs nothing and
+// covers a match-completion path that does not create the summary.
+//
+// 0x46FCA8 is `mov esi, [0xA8D580]` (MPScoreCount), 6 bytes; the hook performs
+// it and resumes at 0x46FCAE.
+DEFINE_HOOK(0x46FCA8, ConquerClass_StatisticsLog_Write, 0x6)
+{
+    StatisticsLogWrite();
+    R->ESI(static_cast<DWORD>(MPScoreCount()));
+    return 0x46FCAE;
+}
+
+// The score screen recomputes the same array when it opens (0x5C98A0): it adds
+// the winner's score bonus and keeps the AI houses the completion routine
+// filtered out. This is the snapshot the client's numbers came from in the
+// tested EC build, so it overwrites the file the hook above may have written.
+// It runs whenever the engine builds the end-of-match summary.
+//
+// 0x5C9D47 is `mov ebp, [0xA8D580]` right after the call at 0x5C9D42, 6 bytes;
+// the hook performs it and resumes at 0x5C9D4D.
+DEFINE_HOOK(0x5C9D47, MPScore_InitDialog_StatisticsLog_Write, 0x6)
+{
+    StatisticsLogWrite();
+    R->EBP(static_cast<DWORD>(MPScoreCount()));
+    return 0x5C9D4D;
+}
+
+// A scenario is starting: empty the statistics file before the match begins.
+// The client parses the file after the game process exits even when the player
+// left mid-match, so without this the previous match's numbers would be
+// recorded as this match's result.
+//
+// 0x683AFE is `mov ecx, [ScenarioClass::Instance]` inside
+// ScenarioClass::StartScenario (every path converges there), 6 bytes; the hook
+// performs it and resumes at 0x683B04. Campaign missions come through here too;
+// the helpers skip them.
+DEFINE_HOOK(0x683AFE, ScenarioClass_StartScenario_StatisticsLogReset, 0x6)
+{
+    EnsureConfigReady();
+    StatisticsLogTruncate();
+    R->ECX(reinterpret_cast<DWORD>(ScenarioClass::Instance));
+    return 0x683B04;
+}
+
 // Top-level draw point, the same address Phobos' ObjectInfo uses. By this point
 // the game has loaded DSurface::Composite (0x88731C) into a register, so the
 // surface is valid for immediate drawing.
@@ -4158,13 +4458,7 @@ DEFINE_HOOK(0x4F4583, GScreenClass_DrawOnTop_WatchBar, 0x6)
     // the very first call. Reading the config is a one-shot: the engine loads
     // uimd.ini at startup, so a changed value needs a game restart (the log
     // explains this when a key that is no longer reloadable is present).
-    static bool s_SourceInstalled = false;
-    if (!s_SourceInstalled)
-    {
-        s_SourceInstalled = true;
-        ConfigSetIniSource(&kEngineUimdSource);
-    }
-    ConfigBeginFrame();
+    EnsureConfigReady();
 
     static bool s_Announced = false;
     static int  s_SeenSectionFound = -1;

@@ -334,8 +334,38 @@ File.Flag=C4_FLAG.PCX
 | `WatchBar.LogPath` | 空 | 留空 = `<游戏根目录>\WatchBar.log` |
 
 无法识别的键名、越界的数字、格式错误的颜色都记录在日志中。日志第一行是版本横幅
-（`==== WatchBar 1.4.2 (编译日期 时间) ====`），随后一行记录读到的键数与来源；版本号固定
+（`==== WatchBar 1.4.3 (编译日期 时间) ====`），随后一行记录读到的键数与来源；版本号固定
 内置在程序里，不是参数。面板显示或隐藏时写一行 `gate:` 记录，`board=1` 表示面板显示。
+
+## 统计日志（供 CnCNet 客户端读取）
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `WatchBar.StatisticsLog` | 0 | `1` = 每局结束时向游戏根目录写一份只含战斗统计的文件；`0` = 不写 |
+| `WatchBar.StatisticsLogPath` | 空 | 留空 = `<游戏根目录>\statistics.log`；相对路径按游戏根目录解析，父目录不存在会自动创建；UTF-8 文本 |
+
+文件内容就是引擎自己写在 `debug.log` 里的那段战斗结果（每位玩家一段
+`名字: Winner/Loser`，随后 `Lost` / `Kills` / `Built` / `Score`），外加客户端会读取的
+`Game loop finished. Average FPS = N` 一行，没有任何其他日志：
+
+```text
+Clarissa: Winner
+ Scheme: 7
+ Lost = 4
+ Kills = 251
+ Built = 28
+ Score = 407924
+Game loop finished. Average FPS = 59
+```
+
+- **每局开始时清空，局末覆盖写入**，所以文件不会累积。中途退出（没有结算数据）时文件保持
+  为空，客户端不会把上一局的数字当成这一局的成绩。
+- 数据直接取自引擎的结算数组，**不读取也不依赖 `debug.log`**：把客户端
+  `Resources\ClientDefinitions.ini` 的 `StatisticsLogFileName` 改成 `statistics.log`
+  后，就可以关闭游戏的调试日志来节省磁盘。
+- 统计范围是引擎结算数组里的全部玩家（含 AI），客户端按自己的玩家名单匹配名字；实测比旧
+  `debug.log` 多出 AI 的数据。战役不写。
+- 客户端默认读 `debug\debug.log`，这一项只负责生成文件，不会替客户端改配置。
 
 ## 兼容性自检
 

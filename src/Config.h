@@ -43,7 +43,7 @@
 #include <windows.h>
 
 // ---------------------------------------------------------------- version
-#define WATCHBAR_VERSION "1.4.2"
+#define WATCHBAR_VERSION "1.4.3"
 
 // The host this build hooks: YR 1.001 gamemd.exe. The two hook sites are
 // absolute addresses in that build, so a different exe is a warning, not a
@@ -377,6 +377,25 @@ struct WatchBarConfig
     int  LogLevel;           // WatchBarLogLevel
     int  LogMaxKB;
     char LogPath[MAX_PATH];  // empty = <game folder>\WatchBar.log
+
+    // ---- statistics log ---------------------------------------------------
+    // WatchBar.StatisticsLog / WatchBar.StatisticsLogPath
+    //
+    // The CnCNet client reads one small file after a match to fill its
+    // statistics screen. By default it reads the engine's debug log, which
+    // carries every debug line of the whole session and is never overwritten
+    // across matches. These two keys make the panel write the combat result
+    // ALONE to a file the client can be pointed at instead, so an author can
+    // turn the game's debug log off and keep the statistics.
+    //
+    // The file is rewritten from the engine's own result data (the same numbers
+    // the in-game score screen and the "Name: Winner" block in debug.log use),
+    // never parsed back out of a log. It is emptied when a scenario starts, so
+    // a match the player leaves early cannot leave the previous match's numbers
+    // behind for the client to pick up, and it is overwritten when the match
+    // ends.
+    int  StatisticsLog;              // 1 = write the file, 0 = leave it alone
+    char StatisticsPath[MAX_PATH];   // empty = <game folder>\statistics.log
 
     // ---- load bookkeeping (not read from the ini) -------------------------
     bool Loaded;             // the settings have been read (see ConfigLoad)

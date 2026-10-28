@@ -261,6 +261,11 @@ int main()
            "WatchBar.LogPath=%s\n",
            c.LogEnabled, c.LogLevel, c.LogMaxKB, c.LogPath);
 
+    printf("\n-- statistics log --\n");
+    printf("WatchBar.StatisticsLog=%d  WatchBar.StatisticsLogPath=%s\n",
+           c.StatisticsLog, c.StatisticsPath);
+    printf("  (0 = no file; the client reads this file instead of debug.log)\n");
+
     int problems = 0;
 
     if (c.MessageCount)

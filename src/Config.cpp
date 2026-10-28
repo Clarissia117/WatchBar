@@ -243,6 +243,13 @@ static void BuildPath(char* dst, size_t n, const char* leaf)
     dst[n - 1] = '\0';
 }
 
+// "X:\..." or "\..." or "/...". Anything else is a path relative to the game
+// folder, which is what an author writing a bare file name expects.
+static bool PathIsAbsolute(const char* p)
+{
+    return p && (p[0] == '\\' || p[0] == '/' || (p[0] && p[1] == ':'));
+}
+
 const char* ConfigIniPath()
 {
     static char path[MAX_PATH];
@@ -396,6 +403,10 @@ static void SetDefaults(WatchBarConfig& c)
     c.LogEnabled = 1;
     c.LogLevel   = kLogInfo;
     c.LogMaxKB   = 1024;
+
+    // statistics log (opt-in: the panel writes no extra file unless asked)
+    c.StatisticsLog     = 0;
+    c.StatisticsPath[0] = '\0';
 }
 
 // ============================================================================
@@ -1159,6 +1170,9 @@ static void ApplyKey(Ctx& x)
     else if (EqNoCase(k, "LogMaxKB"))   IntKey(x, c.LogMaxKB, 1, 102400);
     else if (EqNoCase(k, "LogPath"))    { CopyStr(c.LogPath, sizeof(c.LogPath), x.val); x.handled = true; }
 
+    else if (EqNoCase(k, "StatisticsLog"))     BoolKey(x, c.StatisticsLog);
+    else if (EqNoCase(k, "StatisticsLogPath")) { CopyStr(c.StatisticsPath, sizeof(c.StatisticsPath), x.val); x.handled = true; }
+
     // Free-form notes for the author: accepted and ignored so they never show
     // up as unknown keys. Nothing in the panel reads them.
     else if (EqNoCase(k, "Version") || EqNoCase(k, "Notes"))
@@ -1224,6 +1238,7 @@ static const char* const kKnownKeys[] =
 
     // log
     "LogEnabled", "LogLevel", "LogMaxKB", "LogPath",
+    "StatisticsLog", "StatisticsLogPath",
 
     // free-form notes, accepted and ignored
     "Version", "Notes",
@@ -1482,6 +1497,18 @@ void ConfigLoad()
     // not guaranteed, so a relative path would put the log somewhere unexpected.
     if (!c.LogPath[0])
         BuildPath(c.LogPath, sizeof(c.LogPath), "WatchBar.log");
+
+    // The statistics file follows the same rule, and a relative path the author
+    // wrote is resolved against the game folder too - the client looks for the
+    // file there, and the launcher's CWD is not guaranteed.
+    if (!c.StatisticsPath[0])
+        BuildPath(c.StatisticsPath, sizeof(c.StatisticsPath), "statistics.log");
+    else if (!PathIsAbsolute(c.StatisticsPath))
+    {
+        char leaf[MAX_PATH];
+        lstrcpynA(leaf, c.StatisticsPath, MAX_PATH);
+        BuildPath(c.StatisticsPath, sizeof(c.StatisticsPath), leaf);
+    }
 }
 
 void ConfigBeginFrame()
