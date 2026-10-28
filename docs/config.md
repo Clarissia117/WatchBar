@@ -363,10 +363,7 @@ Game loop finished. Average FPS = 59
 - 数据直接取自引擎的结算数组，**不读取也不依赖 `debug.log`**：把客户端
   `Resources\ClientDefinitions.ini` 的 `StatisticsLogFileName` 改成 `statistics.log`
   后，就可以关闭游戏的调试日志来节省磁盘。
-- 统计范围是引擎结算数组里的全部玩家（含 AI），战役不写。AI 段的名字按客户端自己的叫法写成
-  `Computer`：客户端为 AI 行登记的就是这个名字，结算界面再按难度显示成“简单 AI”等；引擎里的
-  本地化房名（如“电脑”）客户端匹配不上，会把 AI 的数值全部显示为 0。
-- 客户端默认读 `debug\debug.log`，这一项只负责生成文件，不会替客户端改配置。
+- 统计范围是引擎结算数组里的全部玩家（含 AI），战役不写。
 
 ## 兼容性自检
 
